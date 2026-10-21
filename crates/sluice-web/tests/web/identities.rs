@@ -20,8 +20,7 @@ fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
 }
 
 #[tokio::test]
-async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kept_on_its_runs_tab()
-{
+async fn a_shared_owner_is_omitted_on_the_roster_and_kept_on_unit_and_run_pages() {
     let f = Fixture::new().await;
     let id = f.id;
     let run = RunId::new();
@@ -52,7 +51,10 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
     let own = "<span class=\"own\">@lash-f4</span>";
     let plan = f.opened(&format!("/projects/id/{id}")).await;
     let row = between(&plan, "id=\"u-alpha\"", "<div id=\"drill-");
-    assert!(row.contains(own), "the row's title line: {row}");
+    assert!(
+        !row.contains(own),
+        "the sole roster owner is omitted: {row}"
+    );
     let (_, runs) = f
         .get(&format!("/projects/id/{id}/steps/alpha-build?tab=runs"))
         .await;
@@ -62,9 +64,9 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
     let view = &view[view.find("<div id=\"drill-").unwrap()..];
     assert!(
         !view.contains("class=\"own\"") && !view.contains("has-own"),
-        "the open row already says its owner: {view}"
+        "the open row keeps owner detail on its unit page: {view}"
     );
-    assert_eq!(plan.matches("class=\"own\"").count(), 1, "{plan}");
+    assert_eq!(plan.matches("class=\"own\"").count(), 0, "{plan}");
 
     let (_, page) = f.get(&format!("/projects/id/{id}/units/alpha")).await;
     let head = between(&page, "id=\"unit-band\"", "id=\"unit-detail\"");
@@ -90,7 +92,25 @@ async fn a_units_owner_is_said_once_on_its_plan_row_and_in_its_page_head_and_kep
         .unwrap();
     let plan = f.opened(&format!("/projects/id/{id}")).await;
     let row = between(&plan, "id=\"u-alpha\"", "<div id=\"drill-");
-    assert!(row.contains("<span class=\"own\">you</span>"), "{row}");
+    assert!(!row.contains("class=\"own\""), "{row}");
+    // With distinct roster owners, only the project's fallback is redundant.
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("UPDATE steps SET status='running',owner='@reviewer' WHERE project_id=?1 AND step_id='beta-build'", [id.to_string()])?;
+        tx.sql().execute("UPDATE projects SET fallback='owner' WHERE project_id=?1", [id.to_string()])?;
+        tx.changed(Some(id), "steps");
+        Ok(())
+    }).await.unwrap();
+    let plan = f.opened(&format!("/projects/id/{id}")).await;
+    let alpha = between(&plan, "id=\"u-alpha\"", "<div id=\"drill-");
+    let beta = between(&plan, "id=\"u-beta\"", "<div id=\"drill-");
+    assert!(
+        !alpha.contains("class=\"own\""),
+        "fallback omitted: {alpha}"
+    );
+    assert!(
+        beta.contains("<span class=\"own\">@reviewer</span>"),
+        "distinct owner kept: {beta}"
+    );
 }
 
 #[tokio::test]

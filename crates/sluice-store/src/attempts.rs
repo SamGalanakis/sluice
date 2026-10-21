@@ -804,24 +804,17 @@ pub fn step_progress(
 ) -> Result<Value> {
     let project = crate::projects::resolve(tx.sql(), &request.project)?.project_id;
     let step = request.step;
-    // status, run_ids, total, progress, progress_run, progress_runs
-    type Row = (
-        String,
-        String,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    );
+    // status, run_ids, total, progress, progress_run
+    type Row = (String, String, Option<i64>, Option<String>, Option<String>);
     let row: Option<Row> = tx
         .sql()
         .query_row(
-            "SELECT status,run_ids,total,progress,progress_run,progress_runs FROM steps WHERE project_id=?1 AND step_id=?2",
+            "SELECT status,run_ids,total,progress,progress_run FROM steps WHERE project_id=?1 AND step_id=?2",
             params![project.to_string(), step.as_str()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((status, runs, total, progress, progress_run, history)) = row else {
+    let Some((status, runs, total, progress, progress_run)) = row else {
         return Err(PublicError::NotFound {
             message: format!("no step {step} in the plan"),
         }
@@ -891,25 +884,14 @@ pub fn step_progress(
     }
     let at = plans::now()?;
     let merged = Value::Object(merged);
-    // each publication is one result in the step's history, the oldest falling off past
-    // PROGRESS_RUNS; a new run of the step keeps it
-    let mut history: Vec<Value> = history
-        .as_deref()
-        .map(serde_json::from_str)
-        .transpose()?
-        .unwrap_or_default();
-    history.push(json!({"at": at, "progress": merged}));
-    let excess = history.len().saturating_sub(PROGRESS_RUNS);
-    history.drain(..excess);
     tx.sql().execute(
-        "UPDATE steps SET progress=?3,progress_at=?4,progress_run=?5,progress_runs=?6 WHERE project_id=?1 AND step_id=?2",
+        "UPDATE steps SET progress=?3,progress_at=?4,progress_run=?5 WHERE project_id=?1 AND step_id=?2",
         params![
             project.to_string(),
             step.as_str(),
             merged.to_string(),
             at,
-            run.to_string(),
-            Value::Array(history).to_string()
+            run.to_string()
         ],
     )?;
     // A view of its own: no wait (log, status) and no scheduler pass listens for it; the
@@ -920,9 +902,6 @@ pub fn step_progress(
 
 /// The change view `step_progress` touches; the scheduler's dirty check leaves it out.
 pub const PROGRESS_VIEW: &str = "progress";
-/// How many of a step's published results its history keeps (`steps.progress_runs`).
-pub const PROGRESS_RUNS: usize = 20;
-
 /// A step's progress as the dashboard shows it (`step_progress`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Progress {
@@ -935,9 +914,6 @@ pub struct Progress {
     /// The step has finished with outputs (succeeded, or stale since) after the progress was
     /// set: the outputs are the fresher values and the progress is history.
     pub superseded: bool,
-    /// Each result it published, oldest first, at most `PROGRESS_RUNS`: when, and the values
-    /// as they stood then.
-    pub history: Vec<(String, serde_json::Map<String, Value>)>,
 }
 impl Progress {
     /// The freshest value of `field`: the progress value unless the outputs supersede it.
@@ -954,10 +930,9 @@ pub fn read_progress(
     project: ProjectId,
     step: &str,
 ) -> Result<Option<Progress>> {
-    // status, progress, progress_at, progress_run, the result's recorded_at, progress_runs
+    // status, progress, progress_at, progress_run, the result's recorded_at
     type Row = (
         String,
-        Option<String>,
         Option<String>,
         Option<String>,
         Option<String>,
@@ -965,30 +940,16 @@ pub fn read_progress(
     );
     let row: Option<Row> = c
         .query_row(
-            "SELECT s.status,s.progress,s.progress_at,s.progress_run,r.recorded_at,s.progress_runs FROM steps s
+            "SELECT s.status,s.progress,s.progress_at,s.progress_run,r.recorded_at FROM steps s
              LEFT JOIN step_results r ON r.result_id=s.result_id
              WHERE s.project_id=?1 AND s.step_id=?2",
             params![project.to_string(), step],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()?;
-    let Some((status, Some(progress), Some(at), run, finished, history)) = row else {
+    let Some((status, Some(progress), Some(at), run, finished)) = row else {
         return Ok(None);
     };
-    let history = history
-        .as_deref()
-        .map(serde_json::from_str::<Vec<Value>>)
-        .transpose()?
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|entry| {
-            let at = entry["at"].as_str()?.to_owned();
-            let Value::Object(values) = entry["progress"].clone() else {
-                return None;
-            };
-            Some((at, values))
-        })
-        .collect();
     let time = |text: &str| {
         time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339).ok()
     };
@@ -1004,7 +965,6 @@ pub fn read_progress(
         at,
         run,
         superseded,
-        history,
     }))
 }
 

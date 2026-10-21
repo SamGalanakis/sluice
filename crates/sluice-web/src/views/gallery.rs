@@ -660,7 +660,7 @@ fn heads_part() -> TrustedHtml {
 }
 /// A plan's briefing (`views::plan`): Needs you with a question answered in place, a group of
 /// stops and a silence, one item set aside; At work's head and five rows (busy, slow, quiet,
-/// just started, started before the window); Watching; what finished since the owner looked.
+/// just started, started before the window); a Long runs group; what finished since the owner looked.
 fn plan_part(prefix: &str) -> TrustedHtml {
     use super::plan::{RowParts, finished_row, roster_row, track};
     use ui::{Mark, NeedLine, need_line};
@@ -725,8 +725,8 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     ]
     .concat();
     let finished = [
-        finished_row(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries (FIG-7045)", "<code class=\"ref\">3f2b9d1c0e</code> Fourteen entries, each with its photograph credited.", ""),
-        finished_row(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", "<code class=\"ref\">9e1c0a4b7d</code>", ""),
+        finished_row(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries (FIG-7045)", ""),
+        finished_row(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", ""),
     ]
     .concat();
     // a strip's states: busy, slow, quiet, just started, started before the window
@@ -760,18 +760,12 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     let quiet = vec![now - 10_200.0, now - 9_960.0];
     let fresh = every(230.0, 20.0, 40.0);
     let earlier = every(3_500.0, 400.0, 140.0);
-    let stages = |unit: &str, at: Shown, since: u64| {
-        let current = ui::Stage::new("draft", Some(at)).running_since(before(since), since as f64);
-        ui::stage_track(
-            &format!("Stages of {unit}"),
-            &[current, ui::Stage::new("review", None), ui::Stage::new("publish", None)],
-            None,
-        )
-        .0
+    let stages = |_unit: &str, at: Shown, since: u64| {
+        format!("<span class=\"current-stage {}\" data-state=\"{}\">draft {}{}</span>", if at == Shown::Quiet { "quiet" } else { "run" }, at.key(), if at == Shown::Quiet { "quiet " } else { "" }, ui::since(&before(since)))
     };
     let heard = |ago: u64, live: bool| {
         format!(
-            "<span class=\"live{}\" aria-hidden=\"true\"></span><span class=\"heard\">heard {}</span>",
+            "<span class=\"live{}\" aria-hidden=\"true\"></span><span class=\"heard\">· heard {}</span>",
             if live { " is-live" } else { "" },
             ui::ago(&before(ago))
         )
@@ -820,23 +814,15 @@ fn plan_part(prefix: &str) -> TrustedHtml {
         ),
     ]
     .concat();
-    let watching = "<div class=\"wline\"><a class=\"wt\" href=\"#\">Checks every range map's links each night</a><span class=\"result red\"><span>broken 3 of 412</span></span><span class=\"w-hist\" role=\"img\" aria-label=\"The last 12 results: 4 red, 8 green\"><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i><i class=\"r\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"g\"></i><i class=\"r\"></i></span><span class=\"when\">last result 2h ago</span></div>";
+    let long = row("survey", "sol", "Checks every range map's links each night", "broken 3 of 412", format!("<span class=\"current-stage run\">survey {}</span><span class=\"heard\">· heard {}</span>", ui::since(&before(86_400)), ui::ago(&before(7_200))), Pulse { live: true, start: Some(now - 86_400.0), acts: &[], said: &[], active: Some(now - 7_200.0), quiet: false });
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><div class=\"plan-col\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\"><div class=\"aw-head\"><div class=\"aw-left\"><h2>At work</h2><span class=\"n\">5 units</span></div><div class=\"scale\" aria-hidden=\"true\"><span>1h ago</span><span>now</span></div><span class=\"pad\"></span></div><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>article</b><span>1 quiet, 4 running</span></summary>{rows}</details></div><p class=\"ro-more\">2 waiting on earlier work · <a href=\"#\">5 done</a>, the last {last}</p>{pop}</section></div><aside class=\"plan-rail\"><section class=\"pb-sec\">{wh}<div class=\"wl\">{watching}</div></section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><p class=\"fin-quiet\">1 more finished with nothing to say: <a href=\"#\">Scan the photograph archive for credits</a></p></section></aside></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\"><div class=\"aw-head\"><div class=\"aw-left\"><h2>At work</h2><span class=\"n\">6 units</span></div></div><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>article</b><span>1 quiet, 4 running</span></summary>{rows}</details><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>Long runs</b><span>1 running</span></summary>{long}</details></div><p class=\"ro-more\">2 waiting on earlier work · <a href=\"#\">5 done</a>, the last {last}</p>{pop}</section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><button type=\"button\" class=\"quiet\">Mark as seen</button></section></div></div>",
         last = ui::ago(&before(1_500)),
         chev = super::icons::icon(super::icons::Icon::ChevronRight, 16, "chev"),
         nh = ui::SectionHead::new("", "Needs you").count(4).html(),
-        wh = ui::SectionHead::new("", "Watching").count(1).html(),
         listen = super::pulse::listen("/_ui/pulse", &format!("{prefix}pulse-pop")),
         pop = super::pulse::popover(&format!("{prefix}pulse-pop")),
-        fh = ui::SectionHead::new("", "Finished since you looked")
-            .note(&TrustedHtml::owned(format!("since {}", ui::clock(&before(14_400)))))
-            .action(&TrustedHtml::owned(ui::button(
-                ui::Btn::Quiet,
-                "Mark as seen",
-                " type=\"button\"",
-            )))
-            .html(),
+        fh = ui::SectionHead::new("", "Finished since you looked").html(),
     ))
 }
 fn strips_part() -> TrustedHtml {
@@ -1144,13 +1130,12 @@ fn day_lines() -> TrustedHtml {
         still.day_line()
     ))
 }
-/// The project page's view switch (`sluice-board` shows the chosen view at once and keeps it
-/// per project): Plan, Both and Board, each the current one, on the band it sits on.
-fn view_switches() -> TrustedHtml {
+/// The page menu's text links: Plan, Plan and board, Board, with each choice current.
+fn view_choices() -> TrustedHtml {
     let bar = |on: usize| {
         format!(
             "<div class=\"site-head\"><div class=\"band-in site-bar\">{}</div></div>",
-            super::plan::view_switch_sample(Some(["plan", "both", "board"][on]))
+            super::plan::view_links("#", Some(["plan", "both", "board"][on]))
         )
     };
     TrustedHtml::owned(format!(
@@ -1447,7 +1432,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
-    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`plan::need_item`, `plan::finished_card`, `plan::roster_head`, `plan::axis`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
+    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`ui::need_line`, `plan::finished_row`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
     add("Stage track", "A unit's stages in a line: the one before where it stands, that one (green while it runs, teal when it asks you, its word when it stopped) and the next; the rest folded into a count that names them. On a phone only where it stands, and its place.", "`ui::stage_track` from `ui::Stage`s.", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);
@@ -1473,7 +1458,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Keys", "The page's keys, listed in display preferences' Keyboard shortcuts.", "`sluice-keys`.", both(&|_| Ok(keys()))?);
     add("Splitter", "The line between the plan and the board.", "`ui::splitter` (`sluice-splitter`).", both(&|p| Ok(splitters(p)))?);
     add("Day line", "The day's runs as bars, a row a project, the now rule moving with the clock while something runs.", "`DayView::day_line` in `sluice-day`, which moves its now rule and running bars on `sluice-tick`.", both(&|_| Ok(day_lines()))?);
-    add("Project page", "Plan, Both or Board: an icon each in the bar, named by its title, a link each, the server drawing the chosen view and keeping it per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "The view switch in `Plan::tools`, its tabs `sluice-board` (`board.js`); the drawer `ui::drawer` in `sluice-drawer` (`sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_switches()))?);
+    add("Project page", "Plan, Plan and board or Board: text links in the page menu, a link each, the server drawing the chosen view and keeping it per project, the board beside the plan. The step drawer opens over it from any step link; its head is the Step head above.", "View links in `Plan::band`, their selection rendered by the server; the drawer `ui::drawer` in `sluice-drawer` (`sluice.js`). Each is one a page and binds the page's address, so the gallery draws their parts, not a second live instance.", both(&|_| Ok(view_choices()))?);
     add("Components", "Every component, the attributes it reads and what it does.", "Rocket components in `components.js`, light DOM.", (components(), TrustedHtml::default()));
     for part in &mut parts {
         part.wide = matches!(part.name, "Page head" | "Step head" | "Module grid" | "Modules" | "Section heads" | "Plan briefing" | "Step view");

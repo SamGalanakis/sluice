@@ -221,8 +221,7 @@ async fn a_project_pause_and_outside_work_read_as_themselves() {
     let row = plan_html::row(&html, "l3");
     let stage = plan_html::stage(row, "l3-fork");
     assert!(
-        stage.contains("data-state=\"paused\"")
-            && stage.contains("<span class=\"st-w\">paused</span>"),
+        stage.contains("data-state=\"paused\"") && stage.contains("paused at fork"),
         "{stage}"
     );
     let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");
@@ -268,7 +267,7 @@ async fn a_unit_with_a_failed_and_a_quiet_step_counts_once() {
         "{stops:?}"
     );
     assert!(
-        plan_html::summary(&html).contains("1 failed, 1 quiet."),
+        plan_html::summary(&html).contains("1 failed · 1 quiet"),
         "{html}"
     );
 }
@@ -313,7 +312,14 @@ async fn states_priorities_cancellation_and_skipped_units() {
                         let row = plan_html::row(plan, &step);
                         let stage = plan_html::stage(row, &step);
                         assert!(
-                            stage.contains(&format!("data-state=\"{}\"", state.key())),
+                            stage.contains(&format!(
+                                "data-state=\"{}\"",
+                                if state == Shown::Quiet {
+                                    "running"
+                                } else {
+                                    state.key()
+                                }
+                            )),
                             "{state:?}: {stage}"
                         );
                     }
@@ -376,10 +382,10 @@ async fn states_priorities_cancellation_and_skipped_units() {
         // a step a failure holds up as waiting
         let sum = plan_html::summary(&html);
         for said in [
-            "1 failed, 1 cancelled, 1 stale, 1 quiet.",
+            "1 failed · 1 cancelled · 1 stale · 1 quiet",
             // a loose step that has run for days is watched, not at work
-            "5 at work and 1 long run watched;",
-            "3 of 17 done · 17 steps.",
+            "6 at work",
+            "3 of 17 done",
         ] {
             assert!(sum.contains(said), "{said}: {sum}");
         }
@@ -398,8 +404,8 @@ async fn states_priorities_cancellation_and_skipped_units() {
         let card = between(&home, "aria-label=\"states\"", "</article>");
         assert!(
             card.contains(
-                "<p class=\"pm-summary\">1 failed, 1 cancelled, 1 stale, 1 quiet. 5 at work and 1 long run watched;"
-            ) && card.contains("<li><b>Watching</b> · 1 quiet<span class=\"pm-g-said\"><a href=")
+                "<p class=\"pm-summary\">1 failed · 1 cancelled · 1 stale · 1 quiet · 6 at work"
+            ) && card.contains("<li><b>Long runs</b>")
                 && card.contains("/steps/s-quiet\">s-quiet</a>"),
             "{card}"
         );
@@ -546,8 +552,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
         // a blocked step's stage on its row says it is blocked
         let stage = plan_html::stage(gated, "gated");
         assert!(
-            stage.contains("data-state=\"blocked\"")
-                && stage.contains("<span class=\"st-w\">blocked</span>"),
+            stage.contains("data-state=\"blocked\"") && stage.contains("gated next"),
             "{stage}"
         );
         let pane = between(&html, "<aside id=\"board-pane\"", "</aside>");

@@ -172,7 +172,7 @@ async fn an_open_question_to_the_owner_leads_the_titles_and_marks_its_step_in_co
     // under the coral dot, its Answer leading to where it was asked
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     let summary = plan_html::summary(&plan);
-    assert!(summary.contains("3 questions for you</a>,"), "{summary}");
+    assert!(summary.contains("3 questions for you</a> ·"), "{summary}");
     let q = plan_html::question(&plan, lane);
     assert_eq!(plan_html::kind(q), "ask", "{q}");
     // answered in place: its words beside the asker, a field and Answer, posting the reply

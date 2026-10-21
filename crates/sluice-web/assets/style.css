@@ -96,7 +96,7 @@
   --text-title: 22px; --text-figure: 28px;
   --tracking-tight: -0.01em;
 
-  --row: 30px; --topbar: 52px; --sidebar: 248px; --drawer: 264px; --rail: 300px;
+  --row: 30px; --topbar: 52px; --sidebar: 248px; --drawer: 264px;
   --column: 1240px; --gutter: 32px; --measure: 68ch; --col-gap: 24px;
   /* the step drawer beside the page, from 1200px */
   --panel: min(680px, 45vw);
@@ -707,12 +707,6 @@ main.wrap { display: block; padding-top: 28px; padding-bottom: 96px; container: 
 .page-alert { display: flex; gap: 10px; align-items: flex-start; width: fit-content; max-width: 100%; margin: 8px 0 0; padding: 8px 14px;
   border-radius: var(--radius-sm); background: var(--overlap-tint); }
 .page-alert :is(.icon, .ro-icon) { flex: none; margin-top: 1px; color: var(--overlap); }
-/* the plan · both · board switch, three ghost icons beside the plan's sentence */
-.view-switch { display: inline-flex; flex: none; gap: 2px; }
-.view-switch > a { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); color: var(--faint); }
-.view-switch > a:hover { color: var(--ink); background: var(--wash); }
-.view-switch > a[aria-current=true] { color: var(--ink); background: var(--active); }
-
 /* -- narrow: under 860px the sidebar is a drawer over a scrim; the top bar gets the menu
    button and the project's name, its sections a row of their own; under 620px Log, Functions
    and Settings move into More -- */
@@ -745,17 +739,14 @@ main.wrap { display: block; padding-top: 28px; padding-bottom: 96px; container: 
 /* ==== the plan (views::plan; DESIGN.md, The plan): one ruled sheet. Its lead sentence; Needs
    you as hairline rows (a mark column, the sentence, its actions, a question answered in
    place); At work, a row a unit (its engine, its title on two lines, its stage track, what it
-   said last, the pulse strip of its last hour); Watching, the long runs; the waiting and done
-   line; Finished since you looked, a hairline row each. From 1600px Watching and Finished
-   stand in a rail beside the column, sticking to the top. ==================================== */
+   said last, the pulse strip of its last hour), Long runs last; the waiting and done
+   line; Finished since you looked. One centred column at every width. */
 .plan-band .page-head { padding-bottom: 0; }
 .plan-pane > .match-note:not(:empty), .plan-pane > .focus-note { margin: 0 0 14px; }
 .plan-sheet { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
-.plan-col, .plan-rail { min-width: 0; }
 .pb-sec { min-width: 0; margin-top: 36px; }
 .pb-sec[hidden] { display: none; }
-.plan-col > .pb-sec:first-child { margin-top: 20px; }
-.plan-rail > .pb-sec:first-child { margin-top: 36px; }  /* under 1600px the rail follows At work */
+.plan-sheet > .pb-sec:first-child { margin-top: 20px; }
 .plan-sheet .nd-form { display: contents; }
 .seen-line { margin: 0; color: var(--muted); }
 .seen-line > button.quiet { vertical-align: baseline; }
@@ -813,22 +804,13 @@ html.resizing, html.resizing * { cursor: col-resize !important; -webkit-user-sel
 /* the board alone: the plan steps away; the plan alone: the board does */
 html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: none; }
 .project-page[data-view="plan"] > .board-side { display: none; }
-/* no view chosen: the window's width picks it, and the switch marks the one it shows */
-@media (min-width: 1280px) {
-  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="both"] { color: var(--ink); background: var(--active); }
-}
-@media (min-width: 720.02px) and (max-width: 1279px) {
-  body:has(.project-page.has-panel:not([data-view])) .view-switch > [data-view-tab="plan"] { color: var(--ink); background: var(--active); }
-}
+/* No view chosen: the window's width picks it. */
 @media (max-width: 720px) {
   html:not(.drawer-open) .project-page.has-panel:not([data-view], [data-plan-first]) > .plan-pane { display: none; }
   .project-page.has-panel:not([data-view], [data-plan-first]) > .board-side { display: block; }
-  body:has(.project-page.has-panel:not([data-view], [data-plan-first])) .view-switch > [data-view-tab="board"],
-  body:has(.project-page.has-panel[data-plan-first]:not([data-view])) .view-switch > [data-view-tab="plan"] { color: var(--ink); background: var(--active); }
   .more-fold > summary { min-height: 44px; margin-top: 0; }
 }
 @media (max-width: 1279px) {
-  .view-switch [data-view-tab="both"] { display: none; }
   .project-page:not([data-view="board"]) > .board-side { display: none; }
   .board-pane { margin-top: 0; }
   .board-h.generic { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -853,7 +835,7 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
   .more-below:hover { background: var(--wash); }
   .project-page[data-view="board"] .board-scroll { max-width: 1680px; }
   .project-page[data-view="board"] .board-pane .ou-table { width: 100%; }
-  html.drawer-open .project-page.has-panel .board-side, html.drawer-open .view-switch { display: none; }
+  html.drawer-open .project-page.has-panel .board-side { display: none; }
 }
 /* -- Needs you: hairline rows, a mark column: a teal dot a question, a red square a failure,
    ochre a stale input or a silence, muted a cancel -- */
@@ -920,8 +902,7 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
 .nd-gone li > span { margin-right: 8px; }
 .nd-gone li > .nd-form { display: inline; }
 
-/* -- At work: its head (its label, its counts, the order menu, the ⓘ) on the rows' grid, the
-   strips' "1h ago … now" over their column alone -- */
+/* -- At work: its label and counts above the grouped rows -- */
 .ro { --cols: var(--c-engine) minmax(0, 1fr) var(--c-strip) var(--c-fold); min-width: 0; }
 .ro.no-engine { --cols: minmax(0, 1fr) var(--c-strip) var(--c-fold); }
 .aw-head { display: grid; grid-template-columns: minmax(0, 1fr) var(--c-strip) var(--c-fold); gap: 0 14px; align-items: center;
@@ -929,19 +910,12 @@ html:not(.drawer-open) .project-page[data-view="board"] > .plan-pane { display: 
 .aw-left { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
 .aw-left > h2 { margin: 0; }
 .aw-left .n { font-size: var(--text-meta); color: var(--faint); font-variant-numeric: tabular-nums; }
-.scale { display: flex; justify-content: space-between; font-size: var(--text-meta); color: var(--faint); }
-/* the order menu: a quiet "Order: Created ▾" */
-.order-menu { position: relative; }
-.order-menu > summary { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 6px; list-style: none;
-  border-radius: var(--radius-sm); font-size: var(--text-meta); color: var(--faint); cursor: pointer; }
-.order-menu > summary::-webkit-details-marker { display: none; }
-.order-menu > summary:hover, .order-menu[open] > summary { background: var(--wash); color: var(--ink); }
-.order-menu > summary b { font-weight: 500; color: var(--muted); }
-.order-menu .menu { top: calc(100% + 6px); left: 0; }
-/* the ⓘ's legend: each glyph of a strip beside its meaning */
-.legend { display: grid; grid-template-columns: 64px 1fr; gap: 7px 10px; align-items: center; margin: 4px 0 2px; }
-.legend > span:nth-child(even) { color: var(--ink); }
-.legend .strip { position: relative; height: 22px; }
+/* The current stage; full tracks remain on the step and unit pages. */
+.current-stage a { color: inherit; text-decoration: none; }
+.current-stage.run { color: var(--running); }
+.current-stage:is(.paused, .quiet) { color: var(--overlap); }
+.order-options, .view-options { display: flex; flex-direction: column; align-items: stretch; }
+.order-options button { text-align: left; }
 
 /* a group: a quiet fold, its name and its counts */
 details.ro-g { border-top: 1px solid var(--line); }
@@ -1078,36 +1052,13 @@ span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-cla
 .ro-more a { color: var(--muted); text-decoration-color: var(--line-2); }
 .ro-more a:hover { color: var(--ink); }
 
-/* -- Watching: a long run a line: its title, its latest result in its colour, its last runs a
-   square each (green or red, the latest taller), when it last ran -- */
-.wline { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 110px; gap: 4px 16px; align-items: center; min-height: 36px;
-  padding: 6px 0; border-bottom: 1px solid var(--line); }
-.wline .wt { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
-  color: var(--ink); text-decoration: none; overflow-wrap: anywhere; }
-.wline .wt:hover { text-decoration: underline 1px var(--line-2); }
-.result { display: inline-flex; align-items: center; gap: 6px; min-width: 0; font-size: var(--text-sm); color: var(--muted); }
-.result > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.result::before { content: ""; flex: none; width: 6px; height: 6px; border-radius: 2px; background: currentColor; }
-.result.red { color: var(--danger); }
-.result.green { color: var(--running); }
-.w-hist { display: inline-flex; align-items: center; gap: 2px; }
-.w-hist i { width: 6px; height: 6px; border-radius: 1.5px; background: var(--faint); opacity: .85; }
-.w-hist i.g { background: var(--running); }
-.w-hist i.r { background: var(--danger); }
-.w-hist i:last-child { height: 10px; opacity: 1; }
-.wline .when { font-size: var(--text-meta); color: var(--faint); text-align: right; white-space: nowrap; }
-
-/* -- Finished since you looked: a hairline row each, its title, its result in a line, when it
-   finished and how long it took at the right; what said nothing, named in one line after -- */
+/* -- Finished: title, finish time and duration, a plain row each -- */
 .fin { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 .fin-r { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 16px; padding: 9px 0; border-bottom: 1px solid var(--line); }
 .fin-t { color: var(--ink); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
 .fin-t:hover { text-decoration: underline 1px var(--line-2); text-underline-offset: 2px; }
-.fin-v { grid-column: 1; overflow: hidden; font-size: var(--text-sm); color: var(--muted); white-space: nowrap; text-overflow: ellipsis; }
 .fin-w { grid-column: 2; grid-row: 1; font-size: var(--text-meta); color: var(--faint); text-align: right; white-space: nowrap; }
-.fin-w time { color: var(--muted); }
-.fin-quiet { margin: 10px 0 0; font-size: var(--text-sm); color: var(--faint); overflow-wrap: anywhere; }
-.fin-quiet a { color: var(--muted); text-decoration-color: var(--line-2); }
+.fin-w time { color: inherit; }
 .fin-more { margin: 8px 0 0; font-size: var(--text-sm); }
 
 /* -- Done, when asked for: a dense index, newest first, in columns -- */
@@ -1122,33 +1073,10 @@ span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-cla
 .pl-dt { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pl-dk { color: var(--faint); white-space: nowrap; font-size: var(--text-meta); }
 
-/* -- the rail, from 1600px on a plan the board does not stand beside: Watching, the waiting
-   line and Finished in a 300px column behind a hairline, sticking to the top -- */
-@media (min-width: 1600px) {
-  .mainarea:has(.project-page:is(:not(.has-panel), [data-view="plan"])) .wrap { max-width: calc(var(--column) + 40px + var(--rail) + 2 * var(--gutter)); }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-sheet { grid-template-columns: minmax(0, 1fr) var(--rail); gap: 0 40px; align-items: start; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail { position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto;
-    overscroll-behavior: contain; margin-top: 20px; padding-left: 24px; border-left: 1px solid var(--line); }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail > :is(.pb-sec:first-child, [hidden]:first-child + .pb-sec) { margin-top: 0; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline { grid-template-columns: minmax(0, 1fr) auto; padding: 9px 0; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline .wt { grid-column: 1 / span 2; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline .w-hist { grid-column: 1; grid-row: 3; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline .result { grid-column: 1 / span 2; grid-row: 2; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline .result > span { white-space: normal; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .wline .when { grid-column: 2; grid-row: 3; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .fin-r { grid-template-columns: minmax(0, 1fr); }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .fin-t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .fin-w { grid-column: 1; grid-row: auto; text-align: left; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .lk { display: none; }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-rail .ro-more { margin-top: 16px; font-size: var(--text-sm); }
-  .project-page:is(:not(.has-panel), [data-view="plan"]) .plan-done { grid-column: 1 / -1; }
-}
-
 /* -- a narrow plan: the strip gives way to a dot on the track's line, the track to the step at
    work and its place ("2/6") -- */
 @media (max-width: 760px) {
   .aw-head { grid-template-columns: minmax(0, 1fr); }
-  .aw-head > .scale, .aw-head > .pad { display: none; }
   .ro-r { grid-template-columns: auto minmax(0, 1fr) var(--c-fold); gap: 2px 10px; }
   .ro.no-engine .ro-r { grid-template-columns: minmax(0, 1fr) var(--c-fold); }
   .ro-r > .ro-track { display: none; }
@@ -1167,13 +1095,6 @@ span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-cla
   .nd-acts .x { margin-left: auto; }
   .answer-in { grid-column: 1 / span 3; }
   .answer-in .hint .where { display: none; }
-  .wline { grid-template-columns: minmax(0, 1fr) auto; padding: 8px 0; }
-  .wline .wt { grid-column: 1 / span 2; }
-  .wline .result { grid-column: 1; grid-row: 2; }
-  .wline .w-hist { grid-column: 1 / span 2; grid-row: 3; }
-  .fin-r { grid-template-columns: minmax(0, 1fr); }
-  .fin-w { grid-column: 1; grid-row: auto; text-align: left; }
-  .fin-v { white-space: normal; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
   .pl-idx { columns: 1; }
   .pl-idx > li > a { grid-template-columns: 3.4em 14px minmax(0, 1fr); }
   .pl-dk { grid-column: 3 / -1; }

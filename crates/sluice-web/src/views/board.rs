@@ -582,6 +582,9 @@ pub struct ProjectView {
     /// (`DashboardState::long_run_quiet`).
     #[serde(skip)]
     pub long_quiet: f64,
+    /// The project fallback, omitted from roster owner tags.
+    #[serde(skip)]
+    pub fallback: String,
     /// The items of its Needs you the owner set aside (`NeedsDismiss`), newest first.
     #[serde(skip)]
     pub set_aside: Vec<sluice_store::messages::SetAside>,
@@ -683,6 +686,7 @@ impl ProjectView {
             set_aside: vec![],
             seen: None,
             order: Default::default(),
+            fallback: String::new(),
             long_quiet: sluice_runtime::config::DEFAULT_LONG_RUN_QUIET_H * 3600.0,
         };
         view.settle();
@@ -1322,6 +1326,7 @@ pub fn load_board(
     let mut said = said_lately(c, project)?;
     board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
     let cards = Cards::read(c, project)?;
+    board.fallback = c.query_row("SELECT coalesce(fallback, '') FROM projects WHERE project_id=?1", [project.to_string()], |r| r.get(0))?;
     let owners = owners(c, project)?;
     for unit in &mut board.units {
         unit.created = created.get(unit.id.as_str()).copied().unwrap_or(0);

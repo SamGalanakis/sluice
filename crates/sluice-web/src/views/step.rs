@@ -740,66 +740,6 @@ pub struct ProgressView {
     pub fields: Vec<FieldView>,
     pub at: String,
     pub live: bool,
-    /// Each result it published, oldest first (`steps.progress_runs`): when, and how it read.
-    pub history: Vec<(String, Verdict)>,
-}
-/// How a published result reads, from its own fields alone: red when it counts failures
-/// (`failed`, `failures`, `red`, `errors` above zero) or says it did not pass (`ok`, `passed`,
-/// `green`, `success` false, a `status` of failed or red); green when it says it passed or counts
-/// no failures; else it says neither.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum Verdict {
-    Red,
-    Green,
-    Neither,
-}
-impl Verdict {
-    pub fn of(values: &serde_json::Map<String, serde_json::Value>) -> Verdict {
-        use serde_json::Value;
-        let mut green = false;
-        for (name, value) in values {
-            let name = name.to_ascii_lowercase();
-            let counts = ["failed", "failures", "failing", "red", "errors", "fails"]
-                .iter()
-                .any(|w| {
-                    name == *w
-                        || name.ends_with(&format!("_{w}"))
-                        || name.starts_with(&format!("{w}_"))
-                });
-            let passes =
-                ["ok", "passed", "pass", "green", "success", "healthy"].contains(&name.as_str());
-            match value {
-                Value::Number(n) if counts => match n.as_f64() {
-                    Some(n) if n > 0.0 => return Verdict::Red,
-                    Some(_) => green = true,
-                    None => {}
-                },
-                Value::Bool(false) if passes => return Verdict::Red,
-                Value::Bool(true) if passes => green = true,
-                Value::String(text) if name == "status" || name == "result" || name == "state" => {
-                    match text.to_ascii_lowercase().as_str() {
-                        "failed" | "fail" | "red" | "error" | "broken" => return Verdict::Red,
-                        "ok" | "passed" | "pass" | "green" | "success" | "healthy" => green = true,
-                        _ => {}
-                    }
-                }
-                _ => {}
-            }
-        }
-        if green {
-            Verdict::Green
-        } else {
-            Verdict::Neither
-        }
-    }
-    /// Its class on a square or a result: `r`, `g`, or none.
-    pub fn key(self) -> &'static str {
-        match self {
-            Verdict::Red => "r",
-            Verdict::Green => "g",
-            Verdict::Neither => "",
-        }
-    }
 }
 impl ProgressView {
     /// The fields that explain, drawn as rows.
@@ -2451,11 +2391,6 @@ pub fn load_progress(
                 .collect(),
             at: p.at,
             live: p.live,
-            history: p
-                .history
-                .iter()
-                .map(|(at, values)| (at.clone(), Verdict::of(values)))
-                .collect(),
         });
     Ok(())
 }

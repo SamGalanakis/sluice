@@ -25,7 +25,7 @@ const GEOMETRY: &str = r#"(() => {
           plan: box('#plan-pane'),
           board: box('#board-pane'), sum: box('.page-line'),
           // the sections fit the bar, or scroll sideways with the fade that says so
-          navFits: (l => l.scrollWidth <= l.clientWidth || l.hasAttribute('data-overflow'))(document.querySelector('.sec-links')), tabs: box('.view-switch'), split: box('.splitter'),
+          navFits: (l => l.scrollWidth <= l.clientWidth || l.hasAttribute('data-overflow'))(document.querySelector('.sec-links')), menu: box('#plan-band .dm-b'), split: box('.splitter'),
           view: (() => { const p = document.querySelector('#plan-pane')?.checkVisibility(), b = document.querySelector('#board-pane')?.checkVisibility(); return p && b ? 'both' : b ? 'board' : 'plan'; })(),
           // the page is as tall as its main column (or the window): nothing hangs below it
           below: document.documentElement.scrollHeight - Math.max(innerHeight,
@@ -152,10 +152,10 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                         // a phone opens on the plan while something needs attention (beta-build
                         // failed), the switch in the bar over the lead line
                         ("board", 390) => {
-                            assert!(g["tabs"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
+                            assert!(g["menu"].is_object() && g["board"].is_null() && plan.is_object(), "{label}: {g}");
                             assert_eq!(g["view"], "plan", "{label}: {g}");
                             assert!(g["sum"].is_object(), "{label}: the lead line stays over its board {g}");
-                            assert!(g["tabs"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: the switch in the head, over the plan {g}");
+                            assert!(g["menu"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: the switch in the head, over the plan {g}");
                             assert!(g["board"].is_null(), "{label}: {g}");
                         }
                         ("board", _) => {
@@ -163,7 +163,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                             // From 1280px the page takes the frame's column: the plan, the
                             // splitter, the board; the switch offers Plan · Both · Board.
                             let board = &g["board"];
-                            assert!(g["tabs"].is_object() && g["split"].is_object(), "{label}: {g}");
+                            assert!(g["menu"].is_object() && g["split"].is_object(), "{label}: {g}");
                             assert_eq!(g["view"], "both", "{label}: {g}");
                             assert!(
                                 board["left"].as_f64().unwrap()
@@ -188,7 +188,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
                         }
                         _ => {
                             assert!(plan.is_object(), "{label}: {g}");
-                            assert!(g["tabs"].is_null() && g["board"].is_null(), "{label}: {g}");
+                            assert!(g["menu"].is_object() && g["board"].is_null(), "{label}: {g}");
                             assert!(near(&plan["width"], g["right"].as_f64().unwrap() - g["left"].as_f64().unwrap()), "{label}: {g}");
                         }
                     }
@@ -211,7 +211,7 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
             assert!(near(&g["left"], g["areaLeft"].as_f64().unwrap() + 32.0) && near(&g["right"], g["areaRight"].as_f64().unwrap() - 32.0), "{label}: {g}");
             assert!(near(&g["left"], g["navLeft"].as_f64().unwrap()) && near(&g["right"], g["navRight"].as_f64().unwrap()), "{label}: {g}");
             // the switch in the head, over the plan
-            assert!(g["tabs"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: {g}");
+            assert!(g["menu"]["bottom"].as_f64().unwrap() <= g["plan"]["top"].as_f64().unwrap(), "{label}: {g}");
         }
         // Every page's times are nav.js's, in one vocabulary: a running time is a two-unit
         // duration, never "… ago".
@@ -269,15 +269,15 @@ async fn slow_chromium_board_beside_the_plan_and_behind_a_switch_on_a_phone() {
         // At 1440px each choice of the switch is drawn by the server, says it is the current
         // one (filled), and is kept: a fresh load draws it again from the cookie.
         browser.viewport(1440, "light").unwrap();
-        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join(), getComputedStyle(document.querySelector('[data-view-tab][aria-current=true]')).backgroundColor !== getComputedStyle(document.querySelector('[data-view-tab][aria-current=false]')).backgroundColor]; })()";
+        let shown = "(() => { const v = s => document.querySelector(s)?.checkVisibility() ?? false; return [document.querySelector('#project-board').dataset.view, v('#plan-pane'), v('#board-pane'), [...document.querySelectorAll('[data-view-tab]')].filter(a => a.getAttribute('aria-current') === 'true').map(a => a.dataset.viewTab).join()]; })()";
         for (choice, plan, board) in [("plan", true, false), ("board", false, true), ("both", true, true)] {
             pick(&mut browser, choice, ready);
-            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice}");
+            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice]), "{choice}");
             browser
                 .navigate(&format!("{base}/projects/id/{lanes}"))
                 .unwrap();
             browser.wait(ready).unwrap();
-            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice, true]), "{choice} kept");
+            assert_eq!(browser.eval(shown).unwrap(), serde_json::json!([choice, plan, board, choice]), "{choice} kept");
             assert_eq!(
                 browser.eval("document.documentElement.outerHTML.includes('data-view=')").unwrap(),
                 true

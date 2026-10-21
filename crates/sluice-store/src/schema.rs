@@ -27,8 +27,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("runs", "restart_after", "INTEGER"),
     ("steps", "restart_count", "INTEGER NOT NULL DEFAULT 0"),
     ("steps", "restart_history", "TEXT NOT NULL DEFAULT '[]'"),
-    // the results a step published by `step_progress`, newest last, at most 20: a long run's
-    // history (the dashboard's Watching)
+    // Retired progress history, retained for schema compatibility.
     (
         "steps",
         "progress_runs",

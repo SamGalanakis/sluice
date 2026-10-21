@@ -306,7 +306,6 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
             cards[start..at + cards[at..].find("</li>").unwrap()].to_owned()
         }
         "" => String::new(),
-        "watching" => plan_html::region(&body, "w-work").to_owned(),
         _ => plan_html::row(&body, "work").to_owned(),
     }
 }
@@ -366,7 +365,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     let html = card(&state, project).await;
     assert!(
         html.contains(
-            "<span class=\"when\">running <time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
+            "data-step=\"work\">work <time data-since=\"2026-10-05T09:00:00Z\" datetime=\"2026-10-05T09:00:00Z\""
         ),
         "{html}"
     );
@@ -393,7 +392,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     set("UPDATE steps SET status='running' WHERE project_id=?1").await;
     let html = card(&state, project).await;
     assert!(
-        html.contains("<span class=\"when\">running <time data-since=\"2026-10-05T10:00:00Z\""),
+        html.contains("data-step=\"work\">work <time data-since=\"2026-10-05T10:00:00Z\""),
         "{html}"
     );
 
@@ -401,7 +400,7 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
     set("UPDATE steps SET status='succeeded',outputs='{\"ready\":true}' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(html.contains(" · took 2h 14m</span>"), "{html}");
+    assert!(html.contains(" · 2h 14m</span>"), "{html}");
     assert!(!html.contains("data-since"), "{html}");
 
     // a value set by hand did not take its run's time

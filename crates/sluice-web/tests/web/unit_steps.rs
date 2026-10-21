@@ -189,7 +189,7 @@ async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan()
         let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:a-6-draft")).unwrap();
         browser.wait("document.querySelector('#step-detail[data-step=\"a-6-draft\"] .sh-lane')").unwrap();
         // the row's track and the drawer's say the stage is quiet, in the same words
-        assert_eq!(browser.eval("document.querySelector('#u-a-6 .track li.st[data-state=\"quiet\"] .st-n')?.textContent").unwrap(), json!("draft"));
+        assert_eq!(browser.eval("document.querySelector('#u-a-6 .track .current-stage[data-state=\"quiet\"]')?.textContent.startsWith('draft quiet ')").unwrap(), json!(true));
         assert_eq!(browser.eval("document.querySelector('#step-detail .sh-lane li.st[data-state=\"quiet\"] .st-w')?.textContent.startsWith('quiet ')").unwrap(), json!(true));
     }).await.unwrap();
     server.abort();

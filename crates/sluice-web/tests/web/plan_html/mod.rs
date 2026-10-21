@@ -40,8 +40,15 @@ pub fn cell<'a>(html: &'a str, step: &str) -> &'a str {
 /// A step's stage on its unit's track at work (`<li class="st …" data-state="…">`): what a
 /// row says of each step it shows.
 pub fn stage<'a>(html: &'a str, step: &str) -> &'a str {
+    let needle = format!(" data-step=\"{step}\">");
+    if let Some(at) = html.find(&needle)
+        && let Some(start) = html[..at].rfind("<span class=\"current-stage")
+    {
+        let end = html[at..].find("</span>").expect("stage end") + at + "</span>".len();
+        return &html[start..end];
+    }
     let at = html
-        .match_indices(&format!(" data-step=\"{step}\">"))
+        .match_indices(&needle)
         .map(|(at, _)| at)
         .find(|&at| {
             html[..at]
@@ -147,7 +154,7 @@ pub fn summary(html: &str) -> &str {
     between(html, "<p class=\"page-line\">", "</p>")
 }
 /// Where a unit is drawn: "asks" (a question of its in Needs you), "stopped" (a stop in Needs
-/// you), "running" or "waiting" (its row at work), "watching" (a long run's line), "done" (a card of what finished, or a line
+/// you), "running" or "waiting" (its row at work), "done" (a card of what finished, or a line
 /// of the Done index); "" when it is only counted (waiting on earlier work, done long ago).
 pub fn place(html: &str, unit: &str) -> &'static str {
     let mark = format!("data-unit=\"{unit}\"");
@@ -159,9 +166,6 @@ pub fn place(html: &str, unit: &str) -> &'static str {
                 _ => return "stopped",
             }
         }
-    }
-    if has_region(html, &format!("w-{unit}")) {
-        return "watching";
     }
     if has_region(html, &format!("u-{unit}")) {
         return if row(html, unit).contains("class=\"ro-u is-wait\"") {

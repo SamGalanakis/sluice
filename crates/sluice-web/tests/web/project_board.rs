@@ -680,15 +680,14 @@ async fn filtered_units_progress_done_and_paused() {
         assert_eq!(status, StatusCode::OK, "{html}");
         let recent = plan_html::band(&html, "plan-finished");
         assert!(
-            recent.contains("<p class=\"fin-quiet\">4 units finished with nothing to say: ")
-                && !recent.contains("<li class=\"fin-r"),
+            recent.matches("<li class=\"fin-r\"").count() == 5 && recent.contains(">20 more</a>"),
             "{recent}"
         );
         assert!(
             recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
             "{recent}"
         );
-        assert!(!recent.contains("/u20\""), "{recent}");
+        assert!(!recent.contains("/u19\""), "{recent}");
         assert!(
             plan_html::band(&html, "plan-roster").contains(">25 done</a>, the last"),
             "{html}"
@@ -742,8 +741,7 @@ async fn filtered_units_progress_done_and_paused() {
         let stage = plan_html::stage(&html, "hold");
         assert!(stage.contains("data-state=\"paused\""), "{stage}");
         assert!(
-            plan_html::summary(&html)
-                .contains("Nothing needs you. Nothing at work; 1 of 3 done · 3 steps."),
+            plan_html::summary(&html).contains("0 at work · 1 of 3 done"),
             "{html}"
         );
         let reads = sluice_store::ReadPool::open(f._home.path(), 1).unwrap();
@@ -770,7 +768,7 @@ async fn filtered_units_progress_done_and_paused() {
             .unwrap_or_else(|| panic!("no card for held: {home}"));
         assert!(
             card.contains("<p class=\"pm-size\"><span class=\"g g-paused\" role=\"img\" aria-label=\"paused\">")
-                && card.contains("<p class=\"pm-summary\">Nothing at work; 1 of 3 done.</p>"),
+                && card.contains("<p class=\"pm-summary\">0 at work · 1 of 3 done</p>"),
             "{card}"
         );
         let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;

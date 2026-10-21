@@ -60,7 +60,6 @@ spacing:
   row: "30px"
   topbar: "52px"
   sidebar: "248px"
-  rail: "300px"
   column: "1240px"
   gutter: "32px (16px under 860px)"
 motion:
@@ -118,12 +117,10 @@ colour a token with a meaning, and nothing at rest lifted off the page.
   tooltip, a drawer, the dialog.
 - **One ease** for every transition, and reduced motion stops all of it.
 
-A plan answers in its order, a briefing over a roster: one sentence; **Needs you** (questions,
-stops and long silences, a hairline row each, a question answered in place); **Watching** (the
-long runs, their latest result and their last runs); **At work** (a row a unit in creation
-order, its stage track, its latest message, its pulse strip); the line of what waits and what
-is done; **Finished since you looked**. From 1600px Watching and Finished stand in a rail at
-the right. The design rules that keep this from eroding are tested (Rules, below).
+A plan answers in its order, a briefing over a roster: one short summary; **Needs you**
+only when an owner decision waits; **At work**, grouped by recipe, then other units, then
+**Long runs**; the line of what waits and what is done; **Finished since you looked**.
+Everything stays in the main centred column at every width.
 
 The look before this one (cream paper under a navy bar, a raised Needs-you well, Finished
 cards, the step table in every opened row, the Live badge, the legend sentence and nine extra
@@ -140,10 +137,9 @@ outputs and the project's board document. Nothing in view code assumes a project
 - **Finished** has one component and one name: "Finished since you looked", or "Finished
   lately" while no look is kept. It is the units (or steps of no unit) whose run ended most
   recently, newest first.
-- **A long run** (a step of no recipe running six hours or more, or one that reports
-  `step_progress`) is watched, not at work: it is a line in Watching. Its progress fields show
-  as it reported them, and its last results' red or green is said generically from them
-  (Watching, below): sluice never names them.
+- **A long run** (a running step of no recipe alone in its unit, running six hours or more or
+  reporting `step_progress`) is an ordinary At work row in the last group, "Long runs". Its
+  latest progress fields form its message line. Only silence past `long_run_quiet_h` needs a look.
 - **A chip** says what a unit's steps run on: an engine's own name. A fn's row leaves the
   slot empty.
 - **A reference** in prose is drawn as one only when its shape says so: a ticket by the generic
@@ -203,7 +199,7 @@ title). A section's label is 12px/500 in faint ink, sentence case: the lead sent
 page, and the sections are found by their rules. Mono is 11.5px and only in its roles.
 
 **Size and layer.** `--row` 30px (a menu row, a sidebar row), `--topbar` 52px, `--sidebar`
-248px, `--drawer` 264px, `--rail` 300px, `--column` 1240px, `--gutter` 32px (16px under 860px),
+248px, `--drawer` 264px, `--column` 1240px, `--gutter` 32px (16px under 860px),
 `--measure` 68ch. Radii `--radius-xs` 4, `-sm` 6, `-md` 8, `-lg` 12 and `--pill`. Layers
 `--z-sticky` through `--z-skip`, a name each.
 
@@ -279,10 +275,6 @@ column of the top bar and the page.
 - **The column**: the bar's contents and the page share one centred column, up to `--column`
   (1240px) less the gutters, so on a wide screen the page reads as one column under the
   controls that act on it. Prose keeps `--measure`.
-- **The rail** (from 1600px, on a plan the board does not stand beside): a 300px column behind
-  a hairline at the right of the page's column, sticky under the bar, holding Watching, the
-  waiting and done line and Finished ("Finished · since 21:30" there, the long label shortened).
-  Narrower, the same blocks follow At work in the column.
 - **A phone** (under 860px): the sidebar is a drawer (`--drawer`) over a scrim, cast with
   `--shadow-sheet`, opened by the menu button that leads the bar ("Open projects"), closed by
   its ×, the scrim, Escape or a link, the focus going in and coming back (`nav.js`). The bar is
@@ -292,19 +284,18 @@ column of the top bar and the page.
 - **The page's head** (`Frame::head`): on a page the bar names (a plan, home, Day, Stats,
   Messages, Log, Functions, Settings) its name is an `h1` for a screen reader alone and its lead
   line comes first, at 15px: the summary sentence on a plan and home, what the page shows
-  elsewhere, with what stands beside it at its right (the plan's view switch and Details' "⋯",
+  elsewhere, with what stands beside it at its right (the plan's Details "⋯",
   Stats' window switch). A page the bar does not name keeps its heading (`ui::page_head`):
   its crumbs, its name at 22px/600, its Details' "⋯" at the head's right edge, its status line
   under it. No page carries a description blurb.
 - `main` takes the focus when the skip link sends it there and draws no ring.
 
-**The view switch** (Plan · Both · Board on a project with a board, Plan · Board below
-1280px): three ghost icons beside the plan's sentence, the current one on `--active`
-(`aria-current`). The server is the view's one source: a link asks it for its view (`?view=`,
-kept in the project's `sluice_view_<id>` cookie). With none chosen the stylesheet shows the
-width's default: Both from 1280px, the plan between, and on a phone the board unless the plan
-comes first (`data-plan-first`: something needs the owner, or the address asks the plan
-something).
+**View choices** live inside the project's ⋯ menu as text links: Plan, Plan and board, Board.
+The server draws the chosen view (`?view=`, kept in `sluice_view_<id>`). With none chosen the
+stylesheet shows the width's default: both from 1280px, plan between, and on a phone the board
+unless the plan comes first (`data-plan-first`: something needs the owner, or the address asks
+for the plan). Row order is also in ⋯: Created, Plan order, Recent activity, kept per project
+in `sluice_order_<p>` and read alike by pages and streams.
 
 **Narrow end.** At 320 and 390 nothing clips and the page never scrolls sideways.
 
@@ -312,7 +303,7 @@ something).
 
 There are no boxes at rest. A page is the sheet; its regions are rows between hairlines.
 
-- **A hairline list** (`.hl`, Needs you, Watching, At work, Finished, the Done index, a step's
+- **A hairline list** (`.hl`, Needs you, At work, Finished, the Done index, a step's
   calls): rows divided by `--line`, the section's first line its top.
 - **A row** lights `--wash` on hover and stands on `--active` while it is open or current.
 - **A module** (`ui::module_open`, `.mod`, on the grid): a part of a step or unit page (Now,
@@ -375,12 +366,12 @@ each its name and a small mark: done a check, the one at work green with its tim
 ("work ● 2h 44m"), the one asking the owner teal ("land ● asks you"), a stop red, a quiet one
 ochre, one held, paused or bypassed its word ("fork ‖ paused", "bypass · @lead"), the rest a
 faint ring. Separators are faint dashes. On a phone it shrinks to the stage at work and "2/6".
-It replaces the stage strip and the step table on the plan.
+The compact Plan row shows only its current stage and time, or "paused at fork" or "land next"; full tracks remain on step and unit pages.
 
 **The summary sentence** (`ui::summary_sentence`): "1 question for you. 1 failed, 1 cancelled.
 3 units at work: 1 quiet for 53m. 2 waiting. 3 of 10 units done; the last finished 57m ago."
 It names no unit; each part is left out when it has nothing to say; the question links to where
-it is answered under a teal underline. "Nothing needs you" leads it when nothing does.
+it is answered under a teal underline.
 
 ## The plan
 
@@ -388,10 +379,9 @@ it is answered under a teal underline. "Nothing needs you" leads it when nothing
 `sluice-board` its host). Each section is a stream region and each item and row one inside it,
 so a change patches what it moved and nothing else.
 
-- **The lead sentence**: the summary sentence, then the steps counted ("1 question for you, 2
-  failed, 1 quiet. 10 at work; 73 of 92 done · 412 steps."); "Nothing needs you. 9 at work, all
-  heard from in the last 24m. …" when nothing does. What the owner set aside still counts
-  (setting aside is attention, never status). Under a find it says what the find matched.
+- **The lead sentence**: "3 at work · 70 of 81 done". When something needs the owner it leads:
+  "1 question for you · 2 failed · 3 at work · 70 of 81 done". Items set aside do not ask for
+  attention in this line. There is no step count or separate clause for long runs.
 - **Needs you** (`ui::need_line`): a hairline row an item, in a grid of a mark column, the
   sentence and the actions. The mark: a teal dot a question, a red square a failure, an ochre
   ring a silence, stale or a set-aside item (each said in words to a screen reader). The line:
@@ -404,37 +394,24 @@ so a change patches what it moved and nothing else.
   Message it. The × sets an item aside, posting in place, the focus going to its Undo line.
   Questions first, then stops (a shared cause said once, its units folded, Retry all), then
   silences past the host's threshold. The head counts them and holds "Set all aside" (stops and
-  silences only). Nothing to say: the section stays, drawing the empty-sheet sketch over
-  "Nothing needs you" and one muted sentence ("4 items set aside: each comes back when it
-  changes, or with its Undo below." when the owner set them aside). A drawn state reads as
-  checked and clear, where a missing section reads as not loaded.
+  silences only). With no live item, no head or empty state is drawn. Recent Undo lines remain
+  quietly available for ten minutes after setting an item aside.
 - **A question answered in place**: under its words the owner's avatar, a one-line field
   ("Answer <title>…") and Answer, the page's one primary (teal) button, drawn at rest. On focus
   the field grows to about four lines and says "⌘↵ answer · Esc cancel"; ⌘↵ (Ctrl+↵) sends,
   Escape empties and leaves it. A question with an OpenUI form opens its form from Answer
   (`sluice-answer`). Answered, the item gives way to the line that says so.
-- **Watching** (`watching_html`): a long run a line: its title, its latest result as short
-  words coloured by its verdict (a green result, a red one, else ink; a small square of the
-  colour before the words, so colour is never alone), its last twenty results as 6px squares,
-  oldest first, the latest taller (each titled with its time, the strip labelled with its red
-  and green counts), and "last result 2h ago" (or "running 11d"). The verdict comes from the
-  progress fields alone (`step::Verdict::of`): a count of failures (`failed`, `red`, `errors`
-  and their like) above zero, or a status word of failure, is red; a pass count or an `ok` with
-  no failure is green; else neither. Its history is the
-  step's last twenty published results (`steps.progress_runs`, SPEC §6.10). A long run comes to
-  Needs you only on a failure, a question or a silence past `long_run_quiet_h` (24 hours by
-  default).
-- **At work**: its head one line: "At work", its counts ("8 units · 1 waiting"), the order menu
-  ("Order: Created ▾": Created, Plan order, Recent activity, kept per project in
-  `sluice_order_<p>`), the ⓘ (its tooltip draws each glyph of a strip beside its meaning: the
-  legend lives there and nowhere else), and over the strip column only, "1h ago" and "now". A
-  group a recipe (a quiet fold, its name and counts; the units of no recipe after, "Other
-  units"); in a big roster a group shows its remarkable rows and folds the rest to one line
-  ("+7 running · each heard from in the last 11m"). Every fold preserves `open` and the
+- **At work**: the head is "At work" and its counts ("8 units · 1 waiting"). A group per recipe
+  (a quiet fold, its name and counts), then "Other units", then "Long runs". Long runs keep
+  their engine chip, title, latest progress line and pulse strip; their normal silence is not
+  a quiet warning. A failure, question or silence past `long_run_quiet_h` (24 hours by default)
+  still enters Needs you. In a big roster remarkable rows stay visible while healthy rows fold
+  to one line ("+7 running · each heard from in the last 11m"). Folds preserve `open` and the
   project's session memory restores it.
 - **A row** (`roster_row`, a `<details>`): a grid of the engine chip (a blue agent badge, the
   engine's name; the column kept, empty, for a fn), then the title (600, two lines at most) with
-  its owner, the stage track and "heard 12m ago" on one mono line, and its latest message with
+  its owner only when it differs from the project fallback and varies across rows; the current
+  stage and its time plus "heard 12m ago" on one mono line, and its latest message with
   its sender's avatar (one line); the pulse strip; the chevron. A waiting row says what it
   waits on in place of its message. The row never moves when its state changes: it flashes
   (`--accent-tint` fading over 1.4s, `data-flash`, `board.js` on a change of its `data-said`)
@@ -454,12 +431,11 @@ so a change patches what it moved and nothing else.
   step view.
 - **The line under At work**: "4 waiting on earlier work · 25 done, the last 2h ago", the done
   count linking the Done index.
-- **Finished since you looked**: a hairline row each: the title (one link), its result in one
-  line (its summary output, its last message, else up to two short outputs, "ready true · files
-  3"; a sha as code), and at the right its time and "took 2h 19m" (under the title on a phone).
-  Units with nothing to say share one muted line after. The head holds "since 14:02" and "Mark as
-  seen". Seen through with nothing new: the ruled-lines sketch over "Nothing new since you
-  looked" and "Seen through 22:41 · Undo".
+- **Finished since you looked**: at most five plain rows, newest first, then "N more" linking
+  the Done index. Each row is the title (one link), with faint finish time and duration on the
+  right ("20:17 · 59m"). Outputs, result lines and sha chips stay on the unit or step page.
+  "Mark as seen" is a quiet text button after the list. With no mark the head reads "Finished
+  lately". Seen through with nothing new: "Nothing new since you looked", with Undo.
 - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
   first in columns.
 - **The board column** (a project with a board, Both from 1280px): the board's document and its
@@ -479,8 +455,8 @@ ticket: the units whose titles name it; each linked with its state, or a line sa
 does). Its words are asked for (`/projects/id/<p>/ref?r=step:…|sha:…|t:…`), cached a
 minute.
 
-**Empty states** (`ui::state` with a `ui::Sketch`): one of cenote's pen sketches (the empty sheet, the
-ruled lines), drawn on stroke by stroke along the pen's clock and shown finished under reduced
+**Empty states** (`ui::state` with a `ui::Sketch`): one of cenote's pen sketches (ruled lines, a spiral,
+a lens or a speech bubble), drawn on stroke by stroke along the pen's clock and shown finished under reduced
 motion, over its one line and a muted sentence.
 
 ## The step view
@@ -762,7 +738,7 @@ A lane that redraws a page writes its notes here.
 | Page | Route | Drawn by | Components and helpers |
 |---|---|---|---|
 | Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | lead head (the summary sentence), section heads, For you as Needs-you lines, Today, a card a project |
-| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the view switch, Needs you rows, Watching, At work rows, Finished rows, the rail, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm`, the hover card |
+| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the page menu, Needs you rows, At work rows, Finished rows, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, `sluice-confirm`, the hover card |
 | A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head, `sluice-tabs`, Now with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, `sluice-confirm`, the message box |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file in mono on the inset |
@@ -807,7 +783,7 @@ A lane that redraws a page writes its notes here.
   line an open question (its teal mark, its title linking where it is answered, its project, who
   asked and when, Answer and the ×); Today a project's last day in a line. Then a card a project,
   ordered by what needs the owner: its mark and name, its state, its plan's sentence, At work's
-  groups a line each (Watching its own line), "Finished lately:" and the last three, the way to
+  groups a line each (Long runs last), "Finished lately:" and the last three, the way to
   its plan and its day. A muted line names the projects with no steps yet and another the
   archived ones.
 - **Day**: the day as a timetable. The day line: a row a project, its runs as bars (done muted,
@@ -849,7 +825,7 @@ it. Sentence case everywhere; engine names as typed. No hedging and no second cl
 
 Keyboard everywhere with a visible focus ring (`--focus`, 2px, offset 2px); 4.5:1 text on every
 surface in both stocks; 44px targets on a phone; usable at 390px with nothing scrolling
-sideways; status never colour alone (a glyph and a word, a Watching result's square and words);
+sideways; status never colour alone (a glyph and a word);
 every region that updates says so politely, a step's new state once in `#announce`; every
 avatar labelled with its kind; the hover card opens on focus; reduced motion honoured.
 

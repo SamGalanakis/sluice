@@ -148,8 +148,7 @@ async fn a_retry_says_its_run_and_how_its_earlier_runs_ended_even_when_quiet() {
     let row = plan_html::row(&html, "l1");
     let stage = plan_html::stage(row, "l1-work");
     assert!(
-        stage.starts_with("<li class=\"st quiet cur\" data-state=\"quiet\">")
-            && stage.contains("<span class=\"st-w\">quiet <em><time"),
+        stage.contains("data-state=\"quiet\"") && stage.contains("work quiet <time"),
         "{row}"
     );
     assert!(

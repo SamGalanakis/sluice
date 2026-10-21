@@ -272,7 +272,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
         );
     }
     // the latest to finish says what it produced
-    steps["a-3-publish"]["outputs"] = json!({"summary": "string"});
+    steps["a-3-publish"]["outputs"] = json!({"summary": "string", "removed": "boolean", "discarded": {"type": "array", "items": "string"}});
     for (unit, source) in sources {
         let mut scan = json!({"run": "custom.open", "tags": [format!("unit:{unit}")], "in": {"source": {"default": source}}});
         if unit == "s-5" {
@@ -377,21 +377,12 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             tx.sql().execute(
-                "UPDATE steps SET progress=?2,progress_at=?3,progress_runs=?4 WHERE project_id=?1 AND step_id='survey'",
+                "UPDATE steps SET progress=?2,progress_at=?3 WHERE project_id=?1 AND step_id='survey'",
                 (
                     almanac.to_string(),
                     json!({"checked": 1240, "remaining": 310, "failed": 1, "folder": "coast/2019-05", "last mismatch": "A sanderling filed as a dunlin."}).to_string(),
                     ago(4 * M),
-                    // its last results, one an hour, the failures where a folder disagreed
-                    serde_json::Value::Array(
-                        (0..18u64)
-                            .map(|n| {
-                                let failed = u64::from([3, 9, 10, 17].contains(&n));
-                                json!({"at": ago((17 - n) * H + 4 * M), "progress": {"checked": 70 * n, "failed": failed}})
-                            })
-                            .collect(),
-                    )
-                    .to_string(),
+
                 ),
             )?;
             tx.changed(Some(almanac), "status");
@@ -448,7 +439,7 @@ pub async fn seed(writer: &Writer, home: &Path) -> Neutral {
                 "UPDATE steps SET outputs=?2 WHERE project_id=?1 AND step_id='a-3-publish'",
                 (
                     almanac.to_string(),
-                    json!({"summary": "Fourteen entries, each with its photograph credited."})
+                    json!({"summary": "Fourteen entries, each with its photograph credited.", "removed": true, "discarded": []})
                         .to_string(),
                 ),
             )?;

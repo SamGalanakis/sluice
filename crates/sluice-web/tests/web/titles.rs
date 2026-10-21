@@ -56,7 +56,8 @@ async fn recipe_titles_and_search() {
         assert_ne!(plan_html::place(&html, "r1"), "");
         // a unit of no recipe draws its own steps: kit's two, a stage each on its track
         let kit = plan_html::row(&html, "kit");
-        assert_eq!(kit.matches("<li class=\"st ").count(), 2, "{kit}");
+        assert_eq!(kit.matches("class=\"current-stage").count(), 1, "{kit}");
+        assert!(plan_html::stage(kit, "kit-a").contains(">a "), "{kit}");
     }
     {
         // "parser" is in no id: l2's title, which each of its stages carries, and probe's doc; each

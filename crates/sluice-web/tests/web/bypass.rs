@@ -156,8 +156,7 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
     assert_eq!(plan_html::place(&plan, "l"), "waiting");
     let row = plan_html::row(&plan, "l");
     assert!(
-        plan_html::stage(row, "l-close")
-            .contains("<span class=\"st-w\">bypass · orchestrator</span>"),
+        plan_html::stage(row, "l-land").contains("land next") && !row.contains("bypass ·"),
         "{row}"
     );
     let unit = page(&state, format!("/projects/id/{project}/units/l")).await;
@@ -192,9 +191,8 @@ async fn a_bypassed_step_reads_bypassed_and_a_waiting_one_carries_its_tag() {
     let plan = page(&state, format!("/projects/id/{project}")).await;
     // begun: its row at work, its stage done (set by hand) and its tag gone
     let row = plan_html::row(&plan, "l");
-    let stage = plan_html::stage(row, "l-close");
     assert!(
-        stage.contains("data-state=\"manual\"") && !stage.contains("bypass ·"),
+        !row.contains("bypass ·") && plan_html::stage(row, "l-rm").contains("rm next"),
         "{row}"
     );
     // its unit's step view: the state cell says it

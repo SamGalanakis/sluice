@@ -32,7 +32,7 @@ pub struct HomeConfig {
     pub log_max: usize,
     /// Minutes an unread settlement may wait before the owner is asked about it.
     pub unread_alert_min: Option<f64>,
-    /// Hours a long run (the dashboard's Watching) may publish nothing before it needs a look.
+    /// Hours a long run (the dashboard's Long runs group) may publish nothing before it needs a look.
     pub long_run_quiet_h: f64,
     pub notify: Option<NotifyConfig>,
     /// Default bound for a park without --timeout.

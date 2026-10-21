@@ -147,7 +147,7 @@ if __name__ == "__main__":
   so it wakes no `next` or `log_wait` and can be updated every minute. The dashboard shows it
   on the step (live while it runs) and in a board's `Output`; `query` reads it as
   `steps.progress` (JSON) and `steps.progress_at`. It stays until the step's next run
-  starts; its last 20 publications stay in `steps.progress_runs`. `ctx.tool("step_progress", {"outputs": {...}})` is the same call. The step's result
+  starts. `ctx.tool("step_progress", {"outputs": {...}})` is the same call. The step's result
   is still what `main` returns.
 - `ctx.retry_on_failure(step, message)` registers a send-back: if this run then ends rejected,
   `step` is retried with `message` posted to it first.

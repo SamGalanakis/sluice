@@ -9,8 +9,6 @@ use crate::views::TrustedHtml;
 /// A sketch, by what it stands for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sketch {
-    /// An empty sheet: nothing needs the owner.
-    Sheet,
     /// Ruled lines: nothing new has finished.
     Lines,
     /// A spiral at rest: nothing is at work.
@@ -23,7 +21,6 @@ pub enum Sketch {
 impl Sketch {
     fn svg(self) -> &'static str {
         match self {
-            Sketch::Sheet => include_str!("../../../assets/sketches/empty-sheet.svg"),
             Sketch::Lines => include_str!("../../../assets/sketches/lines.svg"),
             Sketch::Spiral => include_str!("../../../assets/sketches/spiral.svg"),
             Sketch::Lens => include_str!("../../../assets/sketches/lens.svg"),
