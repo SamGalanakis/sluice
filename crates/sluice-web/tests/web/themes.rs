@@ -372,7 +372,12 @@ async fn theme_geometry(name: &'static str) {
     tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open("about:blank").unwrap();
         browser.navigate(&url).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
+        // Module imports can still be upgrading folds and hiding inactive tabs when
+        // readyState is complete. Compare both themes after the same enhancement.
+        browser
+            .wait("document.readyState === 'complete' && !!customElements.get('sluice-pulse')")
+            .unwrap();
+        browser.eval("document.fonts.ready").unwrap();
         let mut drawn = Vec::new();
         for theme in ["paper", "carbon"] {
             for width in [390, 1440, 2560] {
