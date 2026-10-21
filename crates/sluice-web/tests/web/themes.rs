@@ -389,6 +389,13 @@ async fn theme_geometry(name: &'static str) {
                 );
             }
             browser.viewport(390, theme).unwrap();
+            // The sidebar's visibility changes only after its closing transition. Count
+            // the settled phone targets in both themes, not the controls sliding away.
+            browser
+                .wait(
+                    "getComputedStyle(document.querySelector('.sidebar')).visibility === 'hidden'",
+                )
+                .unwrap();
             let targets: Vec<(f64, f64, String)> =
                 serde_json::from_value(browser.eval(TARGETS).unwrap()).unwrap();
             drawn.push(targets);

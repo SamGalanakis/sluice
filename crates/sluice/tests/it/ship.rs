@@ -31,6 +31,7 @@ fn slow_ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_target
     use std::{
         io::{Read, Write},
         net::{TcpListener, TcpStream},
+        sync::atomic::{AtomicBool, Ordering},
         time::Duration,
     };
 
@@ -192,19 +193,26 @@ else:
         let _ = fs::remove_file(&gate_record);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let stopped = AtomicBool::new(false);
         let result = std::thread::scope(|scope| {
+            let stopped = &stopped;
             let server = scope.spawn(move || {
-                let (mut stream, _) = listener.accept().unwrap();
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(1)))
-                    .unwrap();
-                let mut request = [0; 1024];
-                if stream.read(&mut request).unwrap_or(0) > 0 {
+                loop {
+                    let (mut stream, _) = listener.accept().unwrap();
+                    if stopped.load(Ordering::Relaxed) {
+                        break;
+                    }
                     stream
-                        .write_all(
-                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                        )
+                        .set_read_timeout(Some(Duration::from_secs(1)))
                         .unwrap();
+                    let mut request = [0; 1024];
+                    // Empty port probes are not an adoption request. Keep serving until
+                    // the ship finishes, including if its HTTP check needs another try.
+                    if stream.read(&mut request).unwrap_or(0) > 0 {
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
                 }
             });
             let mut command = Command::new(&script);
@@ -229,7 +237,8 @@ else:
                 .env("SHIP_FIXTURE_GATES", &gate_record)
                 .output()
                 .unwrap();
-            // Wake the fixture if this scenario stopped before the adoption HTTP request.
+            stopped.store(true, Ordering::Relaxed);
+            // Wake the fixture's accept so it can observe the end of the scenario.
             let _ = TcpStream::connect(address);
             server.join().unwrap();
             result
