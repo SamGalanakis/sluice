@@ -298,12 +298,6 @@ async fn card(state: &views::DashboardState, project: ProjectId) -> String {
     let body = plan_html::opened(&app, String::from_utf8(body.to_vec()).unwrap()).await;
     match plan_html::place(&body, "work") {
         "stopped" => plan_html::stopped(&body, "work").to_owned(),
-        "done" => {
-            let cards = plan_html::band(&body, "plan-finished");
-            let at = cards.find("/steps/work\">").expect("its card");
-            let start = cards[..at].rfind("<li class=\"fin-r\"").unwrap();
-            cards[start..at + cards[at..].find("</li>").unwrap()].to_owned()
-        }
         "" => String::new(),
         _ => plan_html::row(&body, "work").to_owned(),
     }
@@ -395,11 +389,11 @@ async fn a_steps_timer_on_the_plan_ticks_while_its_current_run_goes_and_holds_on
         "{html}"
     );
 
-    // it succeeds, saying it is ready: done, how long its last run took, static
+    // Once it succeeds, the plan only counts it; its row moves to History.
     set("UPDATE runs SET finished_at='2026-10-05T12:14:30Z' WHERE project_id=?1 AND finished_at IS NULL").await;
     set("UPDATE steps SET status='succeeded',outputs='{\"ready\":true}' WHERE project_id=?1").await;
     let html = card(&state, project).await;
-    assert!(html.contains(" · 2h 14m</span>"), "{html}");
+    assert!(html.is_empty(), "{html}");
     assert!(!html.contains("data-since"), "{html}");
 
     // a value set by hand did not take its run's time

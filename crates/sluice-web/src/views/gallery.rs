@@ -632,7 +632,7 @@ fn heads_part() -> TrustedHtml {
 /// stops and a silence, one item set aside; At work's head and five rows (busy, slow, quiet,
 /// just started, started before the window); a Long runs group; what finished since the owner looked.
 fn plan_part(prefix: &str) -> TrustedHtml {
-    use super::plan::{RowParts, finished_row, roster_row, track};
+    use super::plan::{RowParts, roster_row, track};
     use ui::{Mark, NeedLine, need_line};
     let now = (crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -692,11 +692,6 @@ fn plan_part(prefix: &str) -> TrustedHtml {
                 ..Default::default()
             },
         ),
-    ]
-    .concat();
-    let finished = [
-        finished_row(&before(1_500), 15_300.0, "#", "Plovers: the spring guide's entries (FIG-7045)", ""),
-        finished_row(&before(8_040), 14_160.0, "#", "Herons: the autumn guide's entries", ""),
     ]
     .concat();
     // a strip's states: busy, slow, quiet, just started, started before the window
@@ -786,12 +781,11 @@ fn plan_part(prefix: &str) -> TrustedHtml {
     .concat();
     let long = row("survey", "sol", "Checks every range map's links each night", "broken 3 of 412", format!("<span class=\"current-stage run\">survey {}</span><span class=\"heard\">· heard {}</span>", ui::since(&before(86_400)), ui::ago(&before(7_200))), Pulse { live: true, start: Some(now - 86_400.0), acts: &[], said: &[], active: Some(now - 7_200.0), quiet: false });
     TrustedHtml::owned(format!(
-        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\"><div class=\"aw-head\"><div class=\"aw-left\"><h2>At work</h2><span class=\"n\">6 units</span></div></div><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>article</b><span>1 quiet, 4 running</span></summary>{rows}</details><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>Long runs</b><span>1 running</span></summary>{long}</details></div>{pop}</section><section class=\"pb-sec\">{fh}<ul class=\"fin\">{finished}</ul><button type=\"button\" class=\"quiet\">Mark as seen</button></section></div></div>",
+        "<div class=\"plan-pane\"><div class=\"plan-sheet\"><section class=\"pb-sec\">{nh}<ul class=\"nd\">{needs}</ul><ul class=\"nd-gone\"><li><span>Set aside: the silence of Herons: the autumn guide's entries</span><button type=\"button\" class=\"quiet\">Undo</button></li></ul></section><section class=\"pb-sec\"{listen}><div class=\"ro\"><div class=\"aw-head\"><div class=\"aw-left\"><h2>At work</h2><span class=\"n\">6 units</span></div></div><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>article</b><span>1 quiet, 4 running</span></summary>{rows}</details><details class=\"ro-g\" open><summary class=\"ro-group\">{chev}<b>Long runs</b><span>1 running</span></summary>{long}</details></div>{pop}</section><p class=\"meta\">2 finished today · <a href=\"#\">History →</a></p></div></div>",
         chev = super::icons::icon(super::icons::Icon::ChevronRight, 16, "chev"),
         nh = ui::SectionHead::new("", "Needs you").count(4).html(),
         listen = super::pulse::listen("/_ui/pulse", &format!("{prefix}pulse-pop")),
         pop = super::pulse::popover(&format!("{prefix}pulse-pop")),
-        fh = ui::SectionHead::new("", "Finished since you looked").html(),
     ))
 }
 fn strips_part() -> TrustedHtml {
@@ -1401,7 +1395,7 @@ pub fn parts() -> Result<Vec<Part>, askama::Error> {
     add("Module grid", "Twelve columns every module spans, half or whole on a medium sheet.", "`ui::grid_open`, `ui::module_open`.", both(&|p| Ok(grid_part(p)))?);
     add("Modules", "A unit, a question or a step on the grid; the one that needs you swells.", "`ui::module_open` with `ui::Swell`, `.mod-k`, `.mod-t`, `.mod-meta`, `.mod-body`, `.mod-actions`.", both(&|_| Ok(modules_part()))?);
     add("Section heads", "A section's name, its count muted, a note and its one action at the right.", "`ui::SectionHead`, `ui::section_head`.", both(&|_| Ok(heads_part()))?);
-    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), what finished since you looked, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`ui::need_line`, `plan::finished_row`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
+    add("Plan briefing", "A plan's Needs you (each item a sentence, one action and a ×; what was set aside, with Undo), the way to History, and At work: a row a unit, its pulse strip over the last hour (busy, slow, quiet, just started, started earlier); point at a mark, or the faded left edge of one that started earlier, to see what happened then.", "`ui::need_line`, `plan::track` (a `sluice-pulse`, its popover `pulse::popover`, its details `pulse::details`) and `plan::roster_row`, drawn by `views::plan::Plan`.", both(&|p| Ok(plan_part(p)))?);
     add("Stage track", "A unit's stages in a line: the one before where it stands, that one (green while it runs, teal when it asks you, its word when it stopped) and the next; the rest folded into a count that names them. On a phone only where it stands, and its place.", "`ui::stage_track` from `ui::Stage`s.", both(&|_| Ok(strips_part()))?);
     add("Stats", "A project's numbers over a window.", "`views::stats::StatsView` (`durations`, `outcomes`, `throughput`, `slowest_html`), from `StatsData`.", both(&|p| Ok(stats_part(p)))?);
     add("Step view", "A unit step by step: its gates, what each step runs on, its state, progress, runs on one time axis with a tick a message, how long it took, and its last message.", "`unit_steps::View` (`unit_steps::of_unit` from a unit) in `sluice-steps`; a plan row opens to it (`plan::roster_row`).", both(&|_| Ok(steps_part()))?);

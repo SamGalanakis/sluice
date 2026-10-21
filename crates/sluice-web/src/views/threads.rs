@@ -434,6 +434,7 @@ impl InboxView {
         match self.view {
             MessageView::Inbox => "inbox",
             MessageView::Questions => "questions",
+            MessageView::History if self.project.is_some() => "threads",
             MessageView::History => "history",
             MessageView::Thread => "thread",
         }
@@ -625,8 +626,8 @@ impl InboxView {
                             esc(&thread.step_label())
                         ),
                         None => format!(
-                            "<span aria-hidden=\"true\">/</span><a href=\"{}/history\">History</a>",
-                            esc(&self.base())
+                            "<span aria-hidden=\"true\">/</span><a href=\"{}/{}\">History</a>",
+                            esc(&self.base()), if self.project.is_some() { "threads" } else { "history" }
                         ),
                     });
                     let details = Details::new()
@@ -665,7 +666,14 @@ impl InboxView {
         let links: Vec<(String, String, bool)> = [
             ("inbox", "For you"),
             ("questions", "Questions"),
-            ("history", "History"),
+            (
+                if self.project.is_some() {
+                    "threads"
+                } else {
+                    "history"
+                },
+                "History",
+            ),
         ]
         .into_iter()
         .map(|(slug, word)| {

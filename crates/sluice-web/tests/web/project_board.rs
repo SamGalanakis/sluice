@@ -643,26 +643,31 @@ async fn filtered_units_progress_done_and_paused() {
         assert!(section.contains("by its last run"), "{section}");
     }
     {
-        // 25 one-step units, each after the one before, all done
+        // 75 one-step units, each after the one before, all done
         let mut steps = serde_json::Map::new();
         let mut statuses = vec![];
-        for i in 0..25 {
+        for i in 0..75 {
             let id = format!("u{i:02}");
-            let mut step = json!({"run":"custom.open","tags":[format!("unit:{id}")]});
+            let mut step = json!({"run":"custom.open","tags":[format!("unit:{id}")], "in":{"prompt":{"default":"Read /workspace/notes/cenote/ideation/CONTEXT.md first. Task: a /prospect of the entire unfinished workspace with detailed recommendations and all verification evidence included in the final report."}}});
             if i > 0 {
                 step["after"] = json!([format!("u{:02}", i - 1)]);
             }
-            if i == 24 {
+            if i == 74 {
                 step["doc"] = json!("Ship the parser fix");
+            }
+            if i == 73 {
+                step["in"]["prompt"]["default"] = json!(
+                    "Investigate every unfinished workspace recommendation with detailed Unicode résumé context and verification evidence before preparing the report for the reviewer"
+                );
             }
             steps.insert(id.clone(), step);
             statuses.push((&*Box::leak(id.into_boxed_str()), "succeeded"));
         }
         let id = f.project("shelf", json!({"steps": steps}), &statuses).await;
-        // their runs ended a minute apart, u24 last
+        // their runs ended a minute apart, u74 last
         f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            for i in 0..25 {
+            for i in 0..75 {
                 let attempt = format!("019a2b3c-4d5e-7f01-8234-5678900000{i:02}");
                 let run = format!("019a2b3c-4d5e-7f01-8234-5678901000{i:02}");
                 tx.sql().execute(
@@ -671,7 +676,7 @@ async fn filtered_units_progress_done_and_paused() {
                 )?;
                 tx.sql().execute(
                     "INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at,finished_at) VALUES (?1,?2,?3,?4,1,1,'2026-10-06T10:00:00Z','2026-10-06T10:00:00Z',?5)",
-                    (&run, id.to_string(), &attempt, format!("u{i:02}"), format!("2026-10-06T11:{i:02}:00Z")),
+                    (&run, id.to_string(), &attempt, format!("u{i:02}"), format!("2026-10-06T{:02}:{:02}:00Z", 11 + i / 60, i % 60)),
                 )?;
             }
             tx.changed(Some(id), "plan");
@@ -679,30 +684,36 @@ async fn filtered_units_progress_done_and_paused() {
         })
         .await
         .unwrap();
-        // the plan: what finished lately, the latest four, newest first, in one line, for
-        // none said what it produced; the rest counted
         let (status, html) = f.get(&format!("/projects/id/{id}")).await;
         assert_eq!(status, StatusCode::OK, "{html}");
-        let recent = plan_html::band(&html, "plan-finished");
-        assert!(
-            recent.matches("<li class=\"fin-r\"").count() == 5 && recent.contains(">20 more</a>"),
-            "{recent}"
+        assert!(!html.contains("plan-finished"));
+        let (_, history) = f.get(&format!("/projects/id/{id}/history")).await;
+        assert_eq!(
+            history.matches("<li class=\"history-row\"").count(),
+            50,
+            "{history}"
         );
-        assert!(
-            recent.find("/u24\"").unwrap() < recent.find("/u21\"").unwrap(),
-            "{recent}"
-        );
-        assert!(!recent.contains("/u19\""), "{recent}");
-        assert!(
-            plan_html::summary(&html).contains(">25 of 25 done</a>"),
-            "{html}"
-        );
+        assert!(history.find("/units/u74\"").unwrap() < history.find("/units/u26\"").unwrap());
+        assert!(history.contains("Read /workspace/notes/cenote/ideation/CONTEXT.md first."));
+        assert!(!history.contains("Task: a /prospect"));
+        assert!(history.contains(
+            "Investigate every unfinished workspace recommendation with detailed Unicode…"
+        ));
+        assert!(!history.contains("résumé context"));
+        assert!(!history.contains("/units/u00\""));
+        let (_, older) = f.get(&format!("/projects/id/{id}/history?page=1")).await;
+        assert_eq!(older.matches("<li class=\"history-row\"").count(), 25);
+        assert!(older.contains("/units/u00\"") && !older.contains("/units/u74\""));
+        let (_, step) = f.get(&format!("/projects/id/{id}/steps/u00")).await;
+        assert!(step.contains("Task: a /prospect"), "{step}");
+        let (_, home) = f.get("/").await;
+        assert!(!home.contains("Task: a /prospect"));
         // Show: Done, the index: every one, newest first
         let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
         let done = plan_html::band(&html, "plan-done");
-        assert!(done.contains("25 units · 25 steps"), "{done}");
-        assert_eq!(done.matches("<span class=\"pl-at\">").count(), 25, "{done}");
-        for i in 0..25 {
+        assert!(done.contains("75 units · 75 steps"), "{done}");
+        assert_eq!(done.matches("<span class=\"pl-at\">").count(), 75, "{done}");
+        for i in 0..75 {
             assert_eq!(
                 plan_html::done_lines(&html, &format!("u{i:02}")),
                 1,
@@ -715,16 +726,16 @@ async fn filtered_units_progress_done_and_paused() {
                 .find_map(|kind| done.find(&format!("/{kind}/{u}\"><span class=\"pl-at\">")))
                 .unwrap()
         };
-        assert!(at("u24") < at("u23") && at("u23") < at("u00"), "{done}");
+        assert!(at("u74") < at("u73") && at("u73") < at("u00"), "{done}");
         // a line says when it finished (the reader's clock), its title and how long it took; its
         // id is its link's
         let line = plan_html::between(
             done,
-            "<time data-clock datetime=\"2026-10-06T11:24:00Z\"",
+            "<time data-clock datetime=\"2026-10-06T12:14:00Z\"",
             "</li>",
         );
         assert!(
-            line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 1h 24m</span>"),
+            line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 2h 14m</span>"),
             "{line}"
         );
         assert!(!line.contains("pl-did"), "{line}");

@@ -119,7 +119,7 @@ colour a token with a meaning, and nothing at rest lifted off the page.
 
 A plan answers in its order, a briefing over a roster: one short summary; **Needs you**
 only when an owner decision waits; **At work**, grouped by recipe, then other units, then
-**Long runs**; the line of what waits and what is done; **Finished since you looked**.
+**Long runs**; the line of what waits and what is done; a quiet way to **History**.
 Everything stays in the main centred column at every width.
 
 The look before this one (cream paper under a navy bar, a raised Needs-you well, Finished
@@ -134,9 +134,12 @@ outputs and the project's board document. Nothing in view code assumes a project
 
 - **Stages** come from a unit's recipe's own steps, in recipe order. A project with several
   recipes gets a group a recipe in At work; a unit's row draws its stages as a track.
-- **Finished** has one component and one name: "Finished since you looked", or "Finished
-  lately" while no look is kept. It is the units (or steps of no unit) whose run ended most
-  recently, newest first.
+- **History** lists finished units, newest first, grouped by the reader's day. The Plan keeps
+  the work that is live; a quiet “N finished today · History →” under At work leads to its past.
+- **Titles** from a prompt or spec body use its first sentence or line, capped at 80 characters
+  with an ellipsis. An explicit doc, markdown heading or recipe title keeps its own words
+  (bounded at 160 characters on compact surfaces).
+  Every compact surface uses the derived short title; the step page keeps the full brief.
 - **A long run** (a running step of no recipe alone in its unit, running six hours or more or
   reporting `step_progress`) is an ordinary At work row in the last group, "Long runs". Its
   latest progress fields form its message line. Only silence past `long_run_quiet_h` needs a look.
@@ -303,7 +306,7 @@ in `sluice_order_<p>` and read alike by pages and streams.
 
 There are no boxes at rest. A page is the sheet; its regions are rows between hairlines.
 
-- **A hairline list** (`.hl`, Needs you, At work, Finished, the Done index, a step's
+- **A hairline list** (`.hl`, Needs you, At work, History, the Done index, a step's
   calls): rows divided by `--line`, the section's first line its top.
 - **A row** lights `--wash` on hover and stands on `--active` while it is open or current.
 - **A module** (`ui::module_open`, `.mod`, on the grid): a part of a step or unit page (Now,
@@ -433,11 +436,17 @@ so a change patches what it moved and nothing else.
   to the name, oldest first), then its foot: "Last heard 22:11 UTC (10m ago)" and Message · Unit
   page as quiet links, Open step its one outlined move. No step table: the unit's page keeps its
   step view.
-- **Finished since you looked**: at most five plain rows, newest first, then "N more" linking
-  the Done index. Each row is the title (one link), with faint finish time and duration on the
-  right ("20:17 · 59m"). Outputs, result lines and sha chips stay on the unit or step page.
-  "Mark as seen" is a quiet text button after the list. With no mark the head reads "Finished
-  lately". Seen through with nothing new: "Nothing new since you looked", with Undo.
+- **History** (the project tab next to Plan): one compact, linked row per finished unit, newest
+  first: outcome glyph in its existing tone, engine chip, one-line title with an ellipsis, a
+  quiet dot for work finished since the browser's last look, faint finish time and duration at
+  the right. Group by “Today”, “Yesterday”, then “Oct 20” (year when older). Each page renders
+  at most 50 rows, with Newer and Older links. Mark as seen and Seen through · Undo live above
+  this list; marking removes the dots, preserving all rows and day groups. Nothing finished:
+  “Nothing finished yet”. On a phone the row keeps one line, a 44px target and a shrinking title;
+  Mark as seen, Undo and the pagination links also have 44px targets.
+- **Finished today**: a quiet “N finished today · History →” directly below At work, only when
+  at least one unit finished on the reader's current day. The default Plan has no finished rows;
+  its Done index appears only when a filter asks for it.
 - **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
   first in columns.
 - **The board column** (a project with a board, Both from 1280px): the board's document and its
@@ -533,7 +542,7 @@ for each.
   [Attributes: data-signals](https://data-star.dev/reference/attributes)). The page's
   signals are only what its server needs back or what a binding shows: `ver` and `stale` (the
   version the page holds), `theme` and `types` (display preferences), `tab` (the chosen tab),
-  `q` (the plan's find), `seen` (the plan's read cursor), the drawer's `step` and `sver`, each
+  `q` (the plan's find), `seen` (History's read cursor), the drawer's `step` and `sver`, each
   form's busy indicator (`_busy…`, local: Datastar sends no signal whose name starts with `_`)
   and the icon field's chosen file name (`_iconfile`). Inside a Rocket host a page-wide signal is
   bound with `__root` (`data-bind:theme__root`, `data-indicator__root`), which Rocket leaves
@@ -541,11 +550,12 @@ for each.
 - **Stream addresses are fixed; signals carry the query**
   ([Actions: @get](https://data-star.dev/reference/actions), which sends the page's
   signals with every request). The plan's stream is one address (`stream_href`, its `?view=` and
-  `show=` as drawn); the find (`data-bind:q__root`, `data-on:input__debounce.200ms`) and Mark as
-  seen change their signal and open the stream again, the open one ended by Datastar's
+  `show=` as drawn); the find (`data-bind:q__root`, `data-on:input__debounce.200ms`) changes its
+  signal and opens the stream again. History's Mark as seen does the same with `seen` on its
+  own stream address, keeping `?page=`. The open one is ended by Datastar's
   `requestCancellation` ('auto': a newer request to the same address from the page cancels the
   older). The page's own stream asks 'cleanup' too, so it ends with its element.
-- **History is navigation only.** Datastar has no router and leaves the address to the page. The
+- **Browser history is navigation only.** Datastar has no router and leaves the address to the page. The
   one thing in it beyond the server's own query is the drawer's step, `#step:<id>`: an open step
   is something to link, reload and go Back from, so it is the address's fragment, set by plain
   links (`<a data-step>`), and closing the drawer is going back to the plan's address. A tab is a
@@ -659,7 +669,7 @@ The helpers (`crates/sluice-web/src/views/`):
 | Who | `ui.rs` (`Party`, `StepRef`, `party_html`) | a sender or recipient as the identity it is |
 | Fields | `ui.rs` (`head`, `field`, `field_start`, `field_end`); `templates/kit.html` | a form's row: its label, its control, its error |
 | Conversation | `threads::Conversation` (`cards`, rows, the composer) | a thread's messages and its box |
-| The plan's rows | `views/plan.rs` (`RowParts`, `roster_row`, `finished_row`) | At work's row and Finished's row, which the gallery draws as the plan does |
+| The plan's rows | `views/plan.rs` (`RowParts`, `roster_row`), `views/history.rs` | At work and History rows |
 
 The Rocket components (`ui::rocket::COMPONENTS`; the hosts' helpers are in `ui/rocket.rs`), and
 why each is script rather than Datastar attributes:
@@ -738,13 +748,14 @@ A lane that redraws a page writes its notes here.
 | Page | Route | Drawn by | Components and helpers |
 |---|---|---|---|
 | Home | `/` (its stream `/stream`; `/title` the tab title alone) | `views::home` | lead head (the summary sentence), section heads, For you as Needs-you lines, Today, a card a project |
-| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`, `/seen`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the page menu, Needs you rows, At work rows, Finished rows, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, the hover card |
+| History | `/projects/id/<p>/history` (`?page=N`, `/stream`; posts `/history/seen`) | `views::history` | compact day groups, engine chips, read cursor and pagination |
+| A project's plan | `/projects/id/<p>` (`?view=plan`, `both`, `board`; `/stream`; posts `/needs`; `/pulse`, `/ref`) | `views::board::project_page`, `views::plan`, `views::panel` (the board), `templates/project.html` | `sluice-board`, lead head, the page menu, Needs you rows, At work rows, `sluice-pulse`, `sluice-splitter`, `sluice-drawer`, `sluice-keys`, `sluice-menu`, the hover card |
 | A step | `/projects/id/<p>/steps/<s>` (`/stream`; posts `/actions`), and in the drawer | `views::step`, `templates/step.html`, `step_band.html`, `activity.html` | the step head, `sluice-tabs`, Now with the tool calls fold, asking and stopped modules, message cards, `sluice-steps` (Runs), field tables, `sluice-fold`, the message box |
 | A unit | `/projects/id/<p>/units/<u>` (`/stream`) | `views::unit_page`, `templates/unit_page.html` | page head, status line, `sluice-steps`, asking and stopped modules, `sluice-answer` |
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file in mono on the inset |
 | Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | lead head, `sluice-day`, the timetable with its badges and folds |
 | Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | lead head with the window switch beside it, section heads, tables, the throughput chart |
-| For you, Questions, History | `/inbox`, `/questions`, `/history`, and each under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation` |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and project `/inbox`, `/questions`, `/threads` under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation` |
 | A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation, `sluice-conversation`, the message box, `sluice-answer` |
 | Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | lead head, the presets, `sluice-search` filters, the records table, `sluice-copy` |
 | Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | lead head, `sluice-search`, section heads, a card a fn |
@@ -803,7 +814,7 @@ A lane that redraws a page writes its notes here.
 - **Settings**: its sections' index sticky at the left (a scrolling row on a phone), each section
   one form with one Save and its notice; Delete behind its inline guard; a Save never writes over
   another author.
-- **History**: the threads with the owner, a module each; one with an open question says
+- **Messages’ History** (`/threads` in a project): the threads with the owner, a module each; one with an open question says
   "Waiting on your answer" after the teal dot.
 - **A page that cannot be drawn**: the head says what is missing and why; the ways on, each a
   44px link.

@@ -896,7 +896,10 @@ fn the_stylesheet_keeps_the_design_rules() {
     );
     for (planted, rule) in [
         (".nd-i { background: #fff; }", "rule 1"),
-        (".fin-r { box-shadow: 0 1px 2px var(--line); }", "rule 5"),
+        (
+            ".history-row { box-shadow: 0 1px 2px var(--line); }",
+            "rule 5",
+        ),
         (":root { --planted: #123456; }", "rule 2"),
     ] {
         let errors = check(&format!("{css}\n{planted}\n"), &sources);

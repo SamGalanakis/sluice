@@ -57,7 +57,7 @@ async fn slow_chromium_the_plan_fits_every_width_from_a_phone_to_a_wide_screen()
   const head = document.querySelector('.plan-band .page-line').getBoundingClientRect();
   return {scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           out, edge: Math.abs(head.left - box.left) < 1,
-          clipped: [...sheet.querySelectorAll('.ro-t, .nd-l, .fin-t, .wt, .track')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).length,
+          clipped: [...sheet.querySelectorAll('.ro-t, .nd-l, .wt, .track')].filter(e => e.getBoundingClientRect().right > document.documentElement.clientWidth + 0.5).length,
           errors: window.browserErrors};
 })()"#;
         for (project, slug) in [(n.almanac, "almanac"), (n.chores, "chores"), (lanes, "both")] {
@@ -118,22 +118,21 @@ async fn plan_units_and_loose_steps() {
     {
         let html = f.opened(&format!("/projects/id/{}", n.almanac)).await;
         // a-7 asks the owner; the stops in Needs you; at work a row each; done ones lately
-        // finished as plain rows; units not begun only counted
-        let mut want: Vec<(&str, &str)> = vec![("a-7", "asks"), ("a-1", "done")];
+        // units not begun and finished units are only counted
+        let mut want: Vec<(&str, &str)> = vec![("a-7", "asks"), ("a-1", "")];
         want.extend(neutral::STOPPED.iter().map(|u| (*u, "stopped")));
         want.extend(neutral::WAITING.iter().map(|u| (*u, "")));
-        want.extend(["a-2", "a-3", "s-1", "s-2"].iter().map(|u| (*u, "done")));
+        want.extend(["a-2", "a-3", "s-1", "s-2"].iter().map(|u| (*u, "")));
         want.extend(["a-6", "s-3", "index"].iter().map(|u| (*u, "running")));
         // a long run is an ordinary row, in the final group
         want.push(("survey", "running"));
         for (unit, place) in want {
             assert_eq!(plan_html::place(&html, unit), place, "{unit}");
         }
-        // the sections in order: Needs you, At work, then Finished; no Done index unasked
+        // The default Plan shows Needs you and At work; Done is only an index when asked.
         let order = [
             "<!--r:plan-needs-->",
             "<!--r:plan-roster-->",
-            "<!--r:plan-finished-->",
             "<!--r:plan-done-->",
         ];
         for pair in order.windows(2) {
@@ -228,22 +227,12 @@ async fn plan_units_and_loose_steps() {
             long.contains("checked 1240 · remaining 310") && !long.contains("class=\"live quiet\""),
             "{long}"
         );
-        let cards = plan_html::band(&html, "plan-finished");
+        assert!(!html.contains("plan-finished"), "{html}");
+        let (_, history) = f.get(&format!("/projects/id/{}/history", n.almanac)).await;
+        assert!(history.contains("history-row"), "{history}");
         assert!(
-            cards.contains("<h2 id=\"finished\">Finished lately</h2>"),
-            "{cards}"
-        );
-        assert_eq!(cards.matches("<li class=\"fin-r\"").count(), 5, "{cards}");
-        assert!(
-            !cards.contains("fin-v")
-                && !cards.contains("Fourteen entries")
-                && !cards.contains("removed")
-                && !cards.contains("discarded"),
-            "{cards}"
-        );
-        assert!(
-            at(cards, "/units/a-3\"") < at(cards, "/units/s-2\""),
-            "{cards}"
+            at(&history, "/units/a-3\"") < at(&history, "/units/s-2\""),
+            "{history}"
         );
         // At work: a group a recipe, then plain rows, then long runs; creation order by default
         assert!(
@@ -356,14 +345,14 @@ async fn plan_units_and_loose_steps() {
         let (_, html) = f.get(&format!("/projects/id/{}", n.chores)).await;
         let units: Vec<&str> = ["sort-mail", "file-receipts", "water-plants"].to_vec();
         let places: Vec<&str> = units.iter().map(|u| plan_html::place(&html, u)).collect();
-        assert_eq!(places, ["running", "", "done"], "{html}");
-        // a loose step's card leads to its own page
+        assert_eq!(places, ["running", "", ""], "{html}");
+        let (_, history) = f.get(&format!("/projects/id/{}/history", n.chores)).await;
         assert!(
-            plan_html::band(&html, "plan-finished").contains(&format!(
+            history.contains(&format!(
                 "href=\"/projects/id/{}/steps/water-plants\"",
                 n.chores
             )),
-            "{html}"
+            "{history}"
         );
         assert!(
             plan_html::summary(&html).contains("1 at work · 1 waiting · <a href="),
@@ -589,23 +578,20 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     assert_eq!(plan_html::place(&html, "a-4"), "stopped", "{html}");
 }
 
-/// The bug this catches: Finished since you looked forgetting where this browser looked (or
+/// The bug this catches: History forgetting where this browser looked (or
 /// sharing it).
 #[tokio::test]
 async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let router = f.router();
-    let plan = format!("/projects/id/{}", n.almanac);
-    let (_, _, _, html) = browse(&router, &plan, None, "").await;
-    let cards = plan_html::band(&html, "plan-finished");
-    assert!(cards.contains("Finished lately"), "{cards}");
-    // Mark as seen: the look kept in this browser's cookie (the page's stream draws it at once
-    // from its `seen` signal)
-    let through = value(cards, "name=\"through\" value=\"").to_owned();
+    let history = format!("/projects/id/{}/history", n.almanac);
+    let (_, _, _, html) = browse(&router, &history, None, "").await;
+    assert!(html.contains("history-row") && html.contains("Mark as seen"));
+    let through = value(&html, "name=\"through\" value=\"").to_owned();
     let (status, _, cookie, _) = browse(
         &router,
-        &format!("{plan}/seen"),
+        &format!("{history}/seen"),
         Some(&[("through", &through)]),
         "",
     )
@@ -615,47 +601,26 @@ async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
         cookie.starts_with(&format!("sluice_seen_{}={through}; Path=/;", n.almanac)),
         "{cookie}"
     );
-    let jar = cookie.split(';').next().unwrap().to_owned();
-    // with it, nothing has finished since: the line says through when, with its Undo (the look
-    // taken back, `through` 0); without it, another browser still sees the cards
-    let (_, _, _, html) = browse(&router, &plan, None, &jar).await;
-    let seen = plan_html::band(&html, "plan-finished");
-    assert!(
-        seen.contains("<h2 id=\"finished\">Finished lately</h2>")
-            && seen
-                .contains("<h3>Nothing new since you looked</h3><p>Seen through <time data-clock")
-            && seen.contains(" · <button class=\"quiet\">Undo</button></p>")
-            && seen.contains("<input type=\"hidden\" name=\"through\" value=\"0\">")
-            && !seen.contains("class=\"fin-r\""),
-        "{seen}"
-    );
-    let (_, _, _, undone) = browse(
+    let (_, _, _, seen) = browse(&router, &history, None, cookie.split(';').next().unwrap()).await;
+    assert!(seen.contains("Seen through") && seen.contains("Undo") && seen.contains("history-row"));
+    assert!(!seen.contains("aria-label=\"Finished since you looked\""));
+    let (_, _, _, earlier) = browse(
         &router,
-        &plan,
-        None,
-        &format!("sluice_seen_{}=0", n.almanac),
-    )
-    .await;
-    assert!(plan_html::band(&undone, "plan-finished").contains("class=\"fin-r\""));
-    let (_, _, _, other) = browse(&router, &plan, None, "").await;
-    assert!(plan_html::band(&other, "plan-finished").contains("class=\"fin-r\""));
-    // a look kept earlier: what finished after it, said since when
-    let a2 = "a-2";
-    let (_, _, _, html) = browse(
-        &router,
-        &plan,
+        &history,
         None,
         &format!("sluice_seen_{}=1", n.almanac),
     )
     .await;
-    let cards = plan_html::band(&html, "plan-finished");
-    assert!(
-        cards.contains("<h2 id=\"finished\">Finished since you looked</h2>")
-            && cards.matches("<li class=\"fin-r\"").count() == 5
-            && !cards.contains("fin-v")
-            && cards.contains(&format!("/units/{a2}\"")),
-        "{cards}"
-    );
+    assert!(earlier.contains("aria-label=\"Finished since you looked\""));
+    let (_, _, _, undone) = browse(
+        &router,
+        &history,
+        None,
+        &format!("sluice_seen_{}=0", n.almanac),
+    )
+    .await;
+    assert!(!undone.contains("Seen through"));
+    assert!(undone.contains("history-row"));
 }
 
 /// The bugs this catches: a big roster drawing every healthy group open, and folding a group
@@ -695,12 +660,6 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
             && scan.matches("<details id=\"u-c-").count() == 8,
         "{scan}"
     );
-    // a finished card with no output says the unit's last message
-    let cards = plan_html::band(&html, "plan-finished");
-    assert!(
-        cards.contains("class=\"fin-r\"") && !cards.contains("Checked against the regional list"),
-        "{cards}"
-    );
     // a small plan leaves every group open
     let (_, html) = f.get(&format!("/projects/id/{}", f.id)).await;
     let roster = plan_html::band(&html, "plan-roster");
@@ -725,33 +684,34 @@ async fn slow_chromium_mark_as_seen_and_its_undo_go_through_the_answer() {
     let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
     tokio::task::spawn_blocking(move || {
         let mut browser =
-            Chrome::open(&format!("http://{addr}/projects/id/{}", n.almanac)).unwrap();
+            Chrome::open(&format!("http://{addr}/projects/id/{}/history", n.almanac)).unwrap();
         browser.viewport(390, "light").unwrap();
         browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('#plan-finished .fin-r')")
+            .wait("document.readyState === 'complete' && !!document.querySelector('#history-view .history-row')")
             .unwrap();
         browser
             .eval("document.querySelector('#mark-seen button').click()")
             .unwrap();
         browser
-            .wait("!!document.querySelector('#plan-finished .state p')")
+            .wait("!!document.querySelector('#history-view .history-seen .meta')")
             .unwrap();
         let line = browser
-            .eval("(() => { const l = document.querySelector('#plan-finished .state p'); return {h: l.getBoundingClientRect().height, text: l.textContent, head: document.querySelector('#plan-finished h2').textContent, said: document.querySelector('#mark-seen-said').textContent}; })()")
+            .eval("(() => { const l = document.querySelector('#history-view .history-seen .meta'); return {h: l.getBoundingClientRect().height, text: l.textContent, head: document.querySelector('#history-view h2').textContent, said: document.querySelector('#mark-seen-said').textContent}; })()")
             .unwrap();
-        assert!(line["h"].as_f64().unwrap() < 30.0, "{line}");
+        assert!(line["h"].as_f64().unwrap() <= 50.0, "{line}");
+        assert!(browser.eval("document.querySelector('#mark-seen button').getBoundingClientRect().height >= 44").unwrap().as_bool().unwrap());
         assert!(
             line["text"].as_str().unwrap().starts_with("Seen through ")
                 && line["text"].as_str().unwrap().ends_with(" · Undo"),
             "{line}"
         );
-        assert_eq!(line["head"], "Finished lately", "{line}");
+        assert!(!line["head"].as_str().unwrap().is_empty(), "{line}");
         assert_eq!(line["said"], "", "{line}");
         browser
-            .eval("document.querySelector('#plan-finished .state p button').click()")
+            .eval("document.querySelector('#history-view .history-seen .meta button').click()")
             .unwrap();
         browser
-            .wait("!!document.querySelector('#plan-finished .fin-r')")
+            .wait("!document.querySelector('#undo-seen')")
             .unwrap();
         assert_eq!(
             browser.eval("window.browserErrors ?? []").unwrap(),

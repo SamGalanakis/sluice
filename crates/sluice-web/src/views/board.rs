@@ -1,8 +1,8 @@
 //! The v2 board. Relations retain their gate form and unit endpoints.
-use crate::clock::ClockRead;
 use super::step::{FieldView, RunTiming, StepView};
 use super::ui::{Shown, Tally};
 use super::{DashboardSnapshot, DashboardState, FunctionCatalog, TrustedHtml, Viewer};
+use crate::clock::ClockRead;
 use crate::streams::{self, PatchRegion, RenderedBatch, StreamQuery, VersionSignal};
 use askama::Template;
 use axum::{
@@ -16,10 +16,10 @@ use serde::{Deserialize, Serialize};
 use sluice_model::{
     commands::StepStatus,
     error::PublicError,
-    shown::Band as Placed,
     gates::{Gate, GateDecision, StateSnapshot, evaluate_step},
     ids::{ProjectId, ProjectSelector, Revision, StepId, UnitName},
     plan::{FnSignature, Plan, SignatureProvider},
+    shown::Band as Placed,
     types::Type,
 };
 use std::{
@@ -86,10 +86,7 @@ pub fn relations(plan: &Plan) -> Vec<Relation> {
         .collect();
     let mut out = relation_ends(plan);
     for relation in &mut out {
-        let (from, to) = (
-            relation.from.unit(&unit_of),
-            relation.to.unit(&unit_of),
-        );
+        let (from, to) = (relation.from.unit(&unit_of), relation.to.unit(&unit_of));
         relation.cross = from.is_none() || from != to;
     }
     out
@@ -305,7 +302,9 @@ impl UnitView {
             .collect();
         let mut rows = BTreeMap::<usize, Vec<StepView>>::new();
         for step in &steps {
-            rows.entry(depths.depth[&step.id]).or_default().push(step.clone());
+            rows.entry(depths.depth[&step.id])
+                .or_default()
+                .push(step.clone());
         }
         UnitView {
             id: unit.name.clone(),
@@ -575,6 +574,7 @@ pub struct ProjectView {
     /// time of the last it marked seen; `None` before it ever did.
     #[serde(skip)]
     pub seen: Option<u64>,
+    pub zone: i64,
     /// This viewer's roster order, read from the project cookie on pages and streams.
     #[serde(skip)]
     pub order: super::plan::Order,
@@ -621,7 +621,10 @@ impl ProjectView {
         for id in plan.topological_order() {
             facts.deps.insert(
                 id.to_string(),
-                plan.dependencies(id).iter().map(ToString::to_string).collect(),
+                plan.dependencies(id)
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect(),
             );
         }
         for unit in &units {
@@ -685,6 +688,7 @@ impl ProjectView {
             questions: vec![],
             set_aside: vec![],
             seen: None,
+            zone: 0,
             order: Default::default(),
             fallback: String::new(),
             long_quiet: sluice_runtime::config::DEFAULT_LONG_RUN_QUIET_H * 3600.0,
@@ -755,7 +759,11 @@ impl ProjectView {
             for step in &unit.steps {
                 let key = step.key();
                 let mut waits: Vec<Wait> = vec![];
-                for relation in self.relations.iter().filter(|r| r.cross && r.to.key() == key) {
+                for relation in self
+                    .relations
+                    .iter()
+                    .filter(|r| r.cross && r.to.key() == key)
+                {
                     let from = relation.from.key();
                     if waits.iter().any(|w| w.key == from) {
                         continue;
@@ -772,8 +780,10 @@ impl ProjectView {
                                 Some(shown) => shown.word(),
                             };
                             let href = format!("/projects/id/{project}/steps/{id}");
-                            let name =
-                                super::ui::StepRef::new(id.as_str(), names.naming.step(id.as_str()));
+                            let name = super::ui::StepRef::new(
+                                id.as_str(),
+                                names.naming.step(id.as_str()),
+                            );
                             (name, false, href, id.to_string(), doing)
                         }
                         Endpoint::Unit(id) => {
@@ -904,7 +914,11 @@ impl ProjectView {
             let done = self.units.iter().filter(|u| u.done).count();
             let mut parts = vec![(
                 self.units.len(),
-                if self.units.len() == 1 { "unit" } else { "units" },
+                if self.units.len() == 1 {
+                    "unit"
+                } else {
+                    "units"
+                },
             )];
             parts.extend(super::ui::states(&live));
             parts.push((done, "done"));
@@ -964,7 +978,10 @@ impl ProjectView {
         let mut dependents = BTreeMap::<&str, Vec<&str>>::new();
         for (id, deps) in &self.facts.deps {
             for dep in deps {
-                dependents.entry(dep.as_str()).or_default().push(id.as_str());
+                dependents
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(id.as_str());
             }
         }
         kept.insert(root.to_owned());
@@ -980,7 +997,13 @@ impl ProjectView {
                 let mut next = vec![];
                 for id in frontier {
                     let near: Vec<&str> = if way {
-                        self.facts.deps.get(id).into_iter().flatten().map(String::as_str).collect()
+                        self.facts
+                            .deps
+                            .get(id)
+                            .into_iter()
+                            .flatten()
+                            .map(String::as_str)
+                            .collect()
                     } else {
                         dependents.get(id).cloned().unwrap_or_default()
                     };
@@ -1182,12 +1205,14 @@ impl PlanCache {
         let rev = sluice_store::plans::plan_revision(c, project)?;
         let plan = self.compiled(project, rev, signatures, || {
             let rows = sluice_store::plans::read_plan_rows(c, project)?;
-            Ok(sluice_model::plan::compile_rows(&rows, provider).map_err(|e| {
-                PublicError::Invalid {
-                    message: "stored plan cannot be compiled".into(),
-                    errors: e.into_iter().map(|e| e.to_string()).collect(),
-                }
-            })?)
+            Ok(
+                sluice_model::plan::compile_rows(&rows, provider).map_err(|e| {
+                    PublicError::Invalid {
+                        message: "stored plan cannot be compiled".into(),
+                        errors: e.into_iter().map(|e| e.to_string()).collect(),
+                    }
+                })?,
+            )
         })?;
         Ok((rev, plan))
     }
@@ -1216,10 +1241,9 @@ impl PlanCache {
         let mut query = c.prepare_cached(
             "SELECT rev,changes FROM plan_edits WHERE project_id=?1 AND rev>?2 AND rev<=?3 ORDER BY rev",
         )?;
-        let edits = query.query_map(
-            (project.to_string(), next.rev as i64, rev.0 as i64),
-            |r| Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?)),
-        )?;
+        let edits = query.query_map((project.to_string(), next.rev as i64, rev.0 as i64), |r| {
+            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))
+        })?;
         for edit in edits {
             let (rev, changes) = edit?;
             for change in serde_json::from_str::<Vec<PlanChange>>(&changes)? {
@@ -1326,7 +1350,11 @@ pub fn load_board(
     let mut said = said_lately(c, project)?;
     board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
     let cards = Cards::read(c, project)?;
-    board.fallback = c.query_row("SELECT coalesce(fallback, '') FROM projects WHERE project_id=?1", [project.to_string()], |r| r.get(0))?;
+    board.fallback = c.query_row(
+        "SELECT coalesce(fallback, '') FROM projects WHERE project_id=?1",
+        [project.to_string()],
+        |r| r.get(0),
+    )?;
     let owners = owners(c, project)?;
     for unit in &mut board.units {
         unit.created = created.get(unit.id.as_str()).copied().unwrap_or(0);
@@ -1467,10 +1495,15 @@ struct Cards {
 impl Cards {
     fn read(c: &Connection, project: ProjectId) -> sluice_store::Result<Self> {
         let mut rows = BTreeMap::new();
-        let mut q = c.prepare_cached("SELECT step_id,manual,total,done,error FROM steps WHERE project_id=?1")?;
+        let mut q = c.prepare_cached(
+            "SELECT step_id,manual,total,done,error FROM steps WHERE project_id=?1",
+        )?;
         let mut found = q.query([project.to_string()])?;
         while let Some(r) = found.next()? {
-            rows.insert(r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?));
+            rows.insert(
+                r.get::<_, String>(0)?,
+                (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+            );
         }
         Ok(Self {
             rows,
@@ -1597,7 +1630,10 @@ pub fn load_step(
         step.lane_recipe = unit.recipe.clone();
     }
     step.chained = !plan.dependencies(id).is_empty()
-        || plan.steps().keys().any(|s| plan.dependencies(s).contains(id));
+        || plan
+            .steps()
+            .keys()
+            .any(|s| plan.dependencies(s).contains(id));
     // every step after it, near or far: what a succeeded step's Retry may send round again
     let mut dependents: BTreeMap<&StepId, Vec<&StepId>> = BTreeMap::new();
     for s in plan.steps().keys() {
@@ -1661,7 +1697,10 @@ pub fn load_step(
                     shown: reads,
                     step: Some(id.clone()),
                 };
-                step.held_by = Some((gate(at, Some(reads)), gate(through, shown.get(through).copied())));
+                step.held_by = Some((
+                    gate(at, Some(reads)),
+                    gate(through, shown.get(through).copied()),
+                ));
                 break;
             }
             if seen.len() > 512 {
@@ -1684,7 +1723,14 @@ pub fn load_step(
     let unit = home.tagged.then(|| {
         let title = names.naming.unit_title(home.name.as_str());
         let titled = !title.is_empty() && title != home.name.as_str();
-        (home.name.to_string(), if titled { title.to_owned() } else { String::new() })
+        (
+            home.name.to_string(),
+            if titled {
+                title.to_owned()
+            } else {
+                String::new()
+            },
+        )
     });
     Ok(Some(StepDetail {
         project: name,
@@ -1713,14 +1759,14 @@ fn run_timings(
         // the same way); none without a result
         let outcome = match (&finished, status.map(|s| s.parse::<StepStatus>())) {
             (None, _) => Some(Shown::Running),
-            (Some(_), Some(Ok(status))) => Some(sluice_model::shown::classify(
-                &sluice_model::shown::Facts {
+            (Some(_), Some(Ok(status))) => {
+                Some(sluice_model::shown::classify(&sluice_model::shown::Facts {
                     cancelled: error
                         .as_deref()
                         .is_some_and(sluice_model::shown::stored_is_cancel),
                     ..sluice_model::shown::Facts::of(status)
-                },
-            )),
+                }))
+            }
             (Some(_), Some(Err(_)) | None) => None,
         };
         runs.entry(r.get(0)?).or_default().push(Run {
@@ -1746,9 +1792,11 @@ fn run_timings(
                     .filter(|r| r.item >= 0 && r.work == last.work)
                     .collect()
             };
-            let first = round
-                .iter()
-                .min_by(|a, b| a.from.partial_cmp(&b.from).unwrap_or(std::cmp::Ordering::Equal))?;
+            let first = round.iter().min_by(|a, b| {
+                a.from
+                    .partial_cmp(&b.from)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })?;
             let from = first.from?;
             let to = round
                 .iter()
@@ -1866,7 +1914,8 @@ fn last_messages(
     board: &ProjectView,
 ) -> sluice_store::Result<BTreeMap<String, LastMessage>> {
     let mut unit_of = BTreeMap::new();
-    let mut steps = c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
+    let mut steps =
+        c.prepare("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
     let mut rows = steps.query([project.to_string()])?;
     while let Some(r) = rows.next()? {
         unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
@@ -1881,13 +1930,23 @@ fn last_messages(
     while own.len() < wanted.len()
         && let Some(r) = rows.next()?
     {
-        let (from, to, thread): (String, Option<String>, String) = (r.get(0)?, r.get(1)?, r.get(2)?);
+        let (from, to, thread): (String, Option<String>, String) =
+            (r.get(0)?, r.get(1)?, r.get(2)?);
         let mine = [
             unit_of.get(&from),
-            thread.strip_prefix("step-").and_then(|step| unit_of.get(step)),
+            thread
+                .strip_prefix("step-")
+                .and_then(|step| unit_of.get(step)),
         ];
         let message = |received| -> rusqlite::Result<LastMessage> {
-            Ok((r.get(3)?, r.get(4)?, from.clone(), thread.clone(), r.get(5)?, received))
+            Ok((
+                r.get(3)?,
+                r.get(4)?,
+                from.clone(),
+                thread.clone(),
+                r.get(5)?,
+                received,
+            ))
         };
         for unit in mine.into_iter().flatten() {
             if wanted.contains(unit.as_str()) && !own.contains_key(unit) {
@@ -1922,15 +1981,15 @@ fn said_lately(
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64());
     let mut unit_of = BTreeMap::new();
-    let mut steps = c.prepare_cached("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
+    let mut steps =
+        c.prepare_cached("SELECT step_id,coalesce(unit,step_id) FROM steps WHERE project_id=?1")?;
     let mut rows = steps.query([project.to_string()])?;
     while let Some(r) = rows.next()? {
         unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
     }
     let mut out: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
-    let mut messages = c.prepare_cached(
-        "SELECT \"from\",at FROM messages WHERE project_id=?1 ORDER BY id DESC",
-    )?;
+    let mut messages =
+        c.prepare_cached("SELECT \"from\",at FROM messages WHERE project_id=?1 ORDER BY id DESC")?;
     let mut rows = messages.query([project.to_string()])?;
     while let Some(r) = rows.next()? {
         let (from, at): (String, String) = (r.get(0)?, r.get(1)?);
@@ -2015,7 +2074,14 @@ pub async fn step_detail(
                 }
                 None => {
                     let version = format!("catalog:{}", catalog.version);
-                    load_step(c, project, &plans, &version, &CatalogSignatures(&catalog), &id)?
+                    load_step(
+                        c,
+                        project,
+                        &plans,
+                        &version,
+                        &CatalogSignatures(&catalog),
+                        &id,
+                    )?
                 }
             };
             let shared = nav.then(|| super::load_snapshot(c, catalog)).transpose()?;
@@ -2030,14 +2096,7 @@ async fn load(
     project: ProjectId,
     registry: Option<&Registry>,
     panel: bool,
-) -> Result<
-    (
-        DashboardSnapshot,
-        ProjectView,
-        Option<super::panel::Loaded>,
-    ),
-    PublicError,
-> {
+) -> Result<(DashboardSnapshot, ProjectView, Option<super::panel::Loaded>), PublicError> {
     let exact = registry.map(|r| r.0.signatures(project)).transpose()?;
     let catalog = state.catalog.catalog(Some(project))?;
     let plans = state.plans.clone();
@@ -2160,7 +2219,11 @@ pub fn view_cookie(project: ProjectId) -> String {
 /// memory. An address that asks the plan something does not open on the board alone a cookie
 /// kept: it is drawn with no view chosen, so the stylesheet shows the plan (beside the board
 /// on a wide window).
-pub fn chosen_view(query: &BoardQuery, headers: &HeaderMap, project: ProjectId) -> Option<&'static str> {
+pub fn chosen_view(
+    query: &BoardQuery,
+    headers: &HeaderMap,
+    project: ProjectId,
+) -> Option<&'static str> {
     let named = |v: &str| VIEWS.iter().copied().find(|w| *w == v);
     if let Some(v) = query.view.as_deref().and_then(named) {
         return Some(v);
@@ -2213,11 +2276,21 @@ impl BoardQuery {
                 tag.is_empty() || u.steps.iter().any(|s| s.tags.iter().any(|t| t == tag))
             })
         });
-        if let Some(recipe) = self.recipe.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        if let Some(recipe) = self
+            .recipe
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
             view.units.retain(|u| u.recipe == recipe);
             view.recipe = recipe.into();
         }
-        if let Some(root) = self.root.as_deref().map(str::trim).filter(|r| !r.is_empty()) {
+        if let Some(root) = self
+            .root
+            .as_deref()
+            .map(str::trim)
+            .filter(|r| !r.is_empty())
+        {
             let on = |flag: &Option<String>| {
                 flag.as_deref()
                     .is_some_and(|f| !matches!(f, "" | "0" | "false"))
@@ -2236,7 +2309,14 @@ impl BoardQuery {
         view.units.retain(shows);
         view.hidden = before - view.units.len();
         view.show = show.into();
-        let q: String = self.q.as_deref().unwrap_or("").trim().chars().take(200).collect();
+        let q: String = self
+            .q
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .chars()
+            .take(200)
+            .collect();
         let mut query = url::form_urlencoded::Serializer::new(String::new());
         query.append_pair("show", show);
         if let Some(tag) = &self.tag {
@@ -2266,7 +2346,10 @@ fn search(units: &mut Vec<UnitView>, q: &str) -> usize {
         let hit = |text: &str| words.iter().all(|w| text.contains(w.as_str()));
         hit(&own)
             || unit.steps.iter().any(|step| {
-                hit(&format!("{} {} {} {own}", step.id.as_str(), step.title, step.doc).to_lowercase())
+                hit(
+                    &format!("{} {} {} {own}", step.id.as_str(), step.title, step.doc)
+                        .to_lowercase(),
+                )
             })
     });
     units.len()
@@ -2337,7 +2420,7 @@ pub async fn project_page(
                 .into_response());
         }
         view.view = chosen_view(&query, &headers, project);
-        view.seen = super::plan::seen_of(&headers, project);
+        view.zone = super::day::zone(&headers);
         view.order = super::plan::order_of(&headers, project);
         let html = super::plan::render(&view, &shared, &Viewer::from_headers(&headers))?;
         let mut response = Html(html.0).into_response();
@@ -2370,8 +2453,7 @@ pub async fn project_stream(
         datastar: query.datastar.clone(),
     }
     .version(VersionSignal::Page);
-    // the page's find and its look at what finished are its signals (`q`, `seen`): the find
-    // reopens this stream as it is typed, Mark as seen with the new look
+    // The find reopens this stream as it is typed.
     let signals = StreamQuery {
         project: Some(project),
         datastar: query.datastar.clone(),
@@ -2380,7 +2462,6 @@ pub async fn project_stream(
     if query.datastar.is_some() {
         query.q = Some(signals.signal("q"));
     }
-    let seen = signals.number("seen");
     let cache = super::panel::SharedCache::default();
     let watch = state.watch(Some(project));
     let loader = move || {
@@ -2392,23 +2473,25 @@ pub async fn project_stream(
         async move {
             let registry = registry.as_ref().map(|r| &r.0);
             // a deleted project is said where its plan was, and the stream stays open and quiet
-            let (shared, mut view) = match page_snapshot(&state, project, registry, Some(&cache)).await {
-                Err(PublicError::NotFound { .. }) => {
-                    return Ok(RenderedBatch::new(vec![PatchRegion::new(
-                        "project-board",
-                        gone_html("project-board", "This project was deleted.", "/", "All projects"),
-                    )]));
-                }
-                read => read?,
-            };
+            let (shared, mut view) =
+                match page_snapshot(&state, project, registry, Some(&cache)).await {
+                    Err(PublicError::NotFound { .. }) => {
+                        return Ok(RenderedBatch::new(vec![PatchRegion::new(
+                            "project-board",
+                            gone_html(
+                                "project-board",
+                                "This project was deleted.",
+                                "/",
+                                "All projects",
+                            ),
+                        )]));
+                    }
+                    read => read?,
+                };
             query.apply(&mut view)?;
             view.view = chosen_view(&query, &headers, project);
             view.order = super::plan::order_of(&headers, project);
-            view.seen = match seen {
-                Some(0) => None,
-                Some(seen) => Some(seen),
-                None => super::plan::seen_of(&headers, project),
-            };
+            view.zone = super::day::zone(&headers);
             Ok(super::plan::draw(&view, &shared)?.2)
         }
     };
@@ -2455,7 +2538,10 @@ pub fn registration() -> super::PageRegistration {
                 .route("/projects/{name}", get(project_redirect))
                 .route("/projects/id/{project}", get(project_page))
                 .route("/projects/id/{project}/stream", get(project_stream))
-                .route("/projects/id/{project}/units/{unit}", get(super::unit_page::unit_page))
+                .route(
+                    "/projects/id/{project}/units/{unit}",
+                    get(super::unit_page::unit_page),
+                )
                 .route(
                     "/projects/id/{project}/units/{unit}/stream",
                     get(super::unit_page::unit_stream),
@@ -2480,18 +2566,8 @@ pub fn registration() -> super::PageRegistration {
                     "/projects/id/{project}/units/{unit}/drill",
                     get(super::plan::drill),
                 )
-                .route(
-                    "/projects/id/{project}/pulse",
-                    get(super::pulse::details),
-                )
-                .route(
-                    "/projects/id/{project}/ref",
-                    get(super::plan::reference),
-                )
-                .route(
-                    "/projects/id/{project}/seen",
-                    axum::routing::post(super::plan::mark_seen),
-                )
+                .route("/projects/id/{project}/pulse", get(super::pulse::details))
+                .route("/projects/id/{project}/ref", get(super::plan::reference))
                 .route(
                     "/projects/id/{project}/runs/{run}/files/{name}",
                     get(super::step::run_file_page),

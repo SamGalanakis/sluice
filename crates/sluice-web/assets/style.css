@@ -740,7 +740,7 @@ main.wrap { display: block; padding-top: 28px; padding-bottom: 96px; container: 
    you as hairline rows (a mark column, the sentence, its actions, a question answered in
    place); At work, a row a unit (its engine, its title on two lines, its stage track, what it
    said last, the pulse strip of its last hour), Long runs last; the waiting and done
-   line; Finished since you looked. One centred column at every width. */
+   line to History. One centred column at every width. */
 .plan-band .page-head { padding-bottom: 0; }
 .plan-pane > .match-note:not(:empty), .plan-pane > .focus-note { margin: 0 0 14px; }
 .plan-sheet { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; }
@@ -1047,14 +1047,26 @@ span.pp-w { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-cla
 .ro-foot a:not(.btn):hover { color: var(--ink); }
 .ro-foot .btn { margin-left: 6px; }
 
-/* -- Finished: title, finish time and duration, a plain row each -- */
-.fin { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
-.fin-r { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1px 16px; padding: 9px 0; border-bottom: 1px solid var(--line); }
-.fin-t { color: var(--ink); font-weight: 500; text-decoration: none; overflow-wrap: anywhere; }
-.fin-t:hover { text-decoration: underline 1px var(--line-2); text-underline-offset: 2px; }
-.fin-w { grid-column: 2; grid-row: 1; font-size: var(--text-meta); color: var(--faint); text-align: right; white-space: nowrap; }
-.fin-w time { color: inherit; }
-.fin-more { margin: 8px 0 0; font-size: var(--text-sm); }
+/* -- History: one terminal unit per line -- */
+.history-seen { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 24px; margin-bottom: 24px; }
+.history-day + .history-day { margin-top: 28px; }
+.history-day h2 { margin: 0 0 8px; font-size: var(--text-sm); color: var(--muted); font-weight: 500; }
+.history-list { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+.history-row { border-bottom: 1px solid var(--line); }
+.history-row > a { display: grid; grid-template-columns: 16px 64px minmax(0, 1fr) 8px auto; align-items: center; gap: 10px; min-height: 38px; color: var(--ink); text-decoration: none; }
+.history-row > a:hover { background: var(--wash); }
+.history-row .g { width: 16px; height: 16px; margin: 0; }
+.history-row .engine { justify-self: start; max-width: 64px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-new { color: var(--faint); font-weight: 600; }
+.history-when { font-size: var(--text-meta); color: var(--faint); white-space: nowrap; }
+.history-when time { color: inherit; }
+.history-pages { display: flex; gap: 24px; align-items: baseline; margin-top: 24px; }
+@media (max-width: 760px) {
+  .history-row > a { grid-template-columns: 14px 42px minmax(0, 1fr) 4px auto; gap: 6px; min-height: 44px; }
+  .history-row .engine { max-width: 42px; }
+  .history-seen button, .history-pages a { display: inline-flex; align-items: center; min-height: 44px; }
+}
 
 /* -- Done, when asked for: a dense index, newest first, in columns -- */
 .pl-idx { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); columns: 3 22rem; column-gap: 48px; }

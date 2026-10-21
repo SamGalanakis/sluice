@@ -44,14 +44,14 @@ pub fn router(state: MessageState) -> Router {
         .route("/history/stream", get(global_stream))
         .route("/projects/id/{project}/inbox", get(project_page))
         .route("/projects/id/{project}/questions", get(project_page))
-        .route("/projects/id/{project}/history", get(project_page))
+        .route("/projects/id/{project}/threads", get(project_page))
         .route("/projects/id/{project}/thread", get(project_page))
         .route("/projects/id/{project}/inbox/stream", get(project_stream))
         .route(
             "/projects/id/{project}/questions/stream",
             get(project_stream),
         )
-        .route("/projects/id/{project}/history/stream", get(project_stream))
+        .route("/projects/id/{project}/threads/stream", get(project_stream))
         .route("/projects/id/{project}/thread/stream", get(project_stream))
         .route(
             "/projects/id/{project}/messages/{message}/reply",
@@ -71,7 +71,7 @@ pub struct MessageQuery {
 fn view(path: &str) -> MessageView {
     match path.trim_end_matches("/stream").rsplit('/').next() {
         Some("questions") => MessageView::Questions,
-        Some("history") => MessageView::History,
+        Some("history" | "threads") => MessageView::History,
         Some("thread") => MessageView::Thread,
         _ => MessageView::Inbox,
     }
@@ -167,7 +167,7 @@ async fn stream(
                     regions: std::iter::once(regions.remove(0))
                         .chain(super::nav_regions(&nav, path.trim_end_matches("/stream")))
                         .chain(regions)
-                    .collect(),
+                        .collect(),
                 })
             }
         },
@@ -342,10 +342,19 @@ async fn close_many(
 ) -> Response {
     change_many(state, headers, body, "close").await
 }
-async fn reopen_many(State(state): State<MessageState>, headers: HeaderMap, body: Bytes) -> Response {
+async fn reopen_many(
+    State(state): State<MessageState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     change_many(state, headers, body, "reopen").await
 }
-async fn change_many(state: MessageState, headers: HeaderMap, body: Bytes, action: &str) -> Response {
+async fn change_many(
+    state: MessageState,
+    headers: HeaderMap,
+    body: Bytes,
+    action: &str,
+) -> Response {
     let mut targets = vec![];
     for (_, value) in url::form_urlencoded::parse(&body).filter(|(key, _)| key == "m") {
         let parsed = value

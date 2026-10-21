@@ -1,8 +1,7 @@
 //! A project's plan (DESIGN.md, Pages: a project's plan): a briefing, then a roster. The head
 //! says in one sentence what needs the owner and how the work stands; **Needs you**, the one
 //! list, says each question, stop and silence in a sentence with one action and a quick
-//! dismissal; **Finished since you looked** lists what finished since this browser last looked
-//! by title and finish time; **At work** is a roster of the live units, a row each, grouped by
+//! dismissal; **At work** is a roster of the live units, a row each, grouped by
 //! recipe and ordered by creation by default, with a pulse strip of its last
 //! hour (a mark each minute its agent acted, a dotted tail since). A row opens in place to its steps (`unit_steps`).
 //!
@@ -49,28 +48,6 @@ const HEARD_AGING: f64 = 15.0 * 60.0;
 const HEARD_OLD: f64 = 30.0 * 60.0;
 /// How long (minutes) an item the owner set aside keeps its Set aside line, with its Undo.
 const UNDO_MINUTES: f64 = 10.0;
-/// At most this many finished units are drawn in Finished since you looked.
-const FINISHED_MOST: usize = 5;
-/// The cookie that keeps how far this browser has looked at a project's finished units.
-pub fn seen_cookie(project: ProjectId) -> String {
-    format!("sluice_seen_{project}")
-}
-/// What a request's cookie says it has seen of a project: the finish time (seconds since the
-/// epoch) of the last finished unit it marked seen.
-pub fn seen_of(headers: &HeaderMap, project: ProjectId) -> Option<u64> {
-    let name = seen_cookie(project);
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|c| c.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .filter_map(|c| c.trim().split_once('='))
-        .find(|(n, _)| *n == name)
-        .and_then(|(_, v)| v.parse().ok())
-        // 0 is the look undone: everything finished lately again
-        .filter(|seen| *seen > 0)
-}
-
 /// The viewer's roster order, shared by page loads and stream reconnects through a cookie.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum Order {
@@ -105,7 +82,7 @@ pub fn order_of(headers: &HeaderMap, project: ProjectId) -> Order {
         .unwrap_or_default()
 }
 
-fn now() -> f64 {
+pub(super) fn now() -> f64 {
     crate::clock::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64())
@@ -114,7 +91,7 @@ fn epoch(at: &str) -> Option<f64> {
     super::timestamp(at).map(|t| t as f64)
 }
 /// The step that says how its unit stands: the first whose state is the unit's.
-fn current(unit: &UnitView) -> Option<&StepView> {
+pub(super) fn current(unit: &UnitView) -> Option<&StepView> {
     let shown = unit.shown();
     unit.steps
         .iter()
@@ -122,7 +99,7 @@ fn current(unit: &UnitView) -> Option<&StepView> {
         .or_else(|| unit.steps.first())
 }
 /// Where a unit's name leads: a loose step's own page, else the unit's.
-fn unit_href(view: &ProjectView, unit: &UnitView) -> String {
+pub(super) fn unit_href(view: &ProjectView, unit: &UnitView) -> String {
     match unit.steps.as_slice() {
         [only] if !unit.tagged => only.href(),
         _ => unit.href(&view.project.id),
@@ -133,7 +110,7 @@ fn title(unit: &UnitView) -> &str {
     unit.heading()
 }
 /// How long a unit's work took, first start to last end.
-fn took(unit: &UnitView) -> f64 {
+pub(super) fn took(unit: &UnitView) -> f64 {
     let mut from = f64::MAX;
     let mut to = 0.0f64;
     for t in unit.steps.iter().filter_map(|s| s.shown_timing()) {
@@ -247,10 +224,6 @@ pub struct Plan<'a> {
     at_work: usize,
     /// The done units, the latest finished first.
     done: Vec<&'a UnitView>,
-    /// Finished since this browser looked (or lately, with no look kept), newest first, and how
-    /// many more there are.
-    finished: Vec<&'a UnitView>,
-    finished_more: usize,
 }
 
 /// A long run: a running step of no recipe, alone in its unit, that has run `LONG_RUN` or
@@ -288,19 +261,6 @@ impl<'a> Plan<'a> {
         let live = |unit: &&UnitView| !unit.done;
         let mut done: Vec<&UnitView> = view.units.iter().filter(|u| u.done).collect();
         done.sort_by(|a, b| b.finished().cmp(a.finished()).then(a.pos.cmp(&b.pos)));
-        // what finished since this browser looked: after its mark, else the last few
-        let mut finished: Vec<&UnitView> = done
-            .iter()
-            .copied()
-            .filter(|u| !u.finished().is_empty())
-            .filter(|u| match view.seen {
-                Some(seen) => epoch(u.finished()).is_some_and(|t| t > seen as f64),
-                None => true,
-            })
-            .collect();
-        let finished_more = finished.len().saturating_sub(FINISHED_MOST);
-        finished.truncate(FINISHED_MOST);
-
         // a find, a chain or a recipe's units asked for: each one a row, none only counted
         let narrowed = !view.q.is_empty() || !view.root.is_empty() || !view.recipe.is_empty();
         let mut groups: Vec<Group> = vec![];
@@ -385,8 +345,6 @@ impl<'a> Plan<'a> {
             later,
             at_work,
             done,
-            finished,
-            finished_more,
         };
         plan.needs = plan.needs();
         plan
@@ -1319,20 +1277,15 @@ impl<'a> Plan<'a> {
 
     // ---- the sheet -----------------------------------------------------------------------------
 
-    /// Needs you, At work and Finished in the same main column, with a done index on demand.
+    /// Needs you and At work, with a quiet way to History and a done index on demand.
     pub fn sheet(&self) -> TrustedHtml {
         let mut out = String::from("<div class=\"plan-sheet\">");
         out.push_str(&region("plan-needs", &self.needs_html()));
         out.push_str(&region("plan-roster", &self.roster_html()));
-        out.push_str(&region(
-            "plan-finished",
-            &match (self.finished.is_empty(), self.view.seen) {
-                // marked seen and nothing finished since: said once, with its Undo
-                (true, Some(seen)) => self.seen_html(seen),
-                (true, None) => "<div id=\"plan-finished\" hidden></div>".to_owned(),
-                (false, _) => self.finished_html(),
-            },
-        ));
+        let today = super::history::finished_today(self.view);
+        if today > 0 {
+            out.push_str(&format!("<p class=\"plan-history meta\">{today} finished today · <a href=\"{}/history\">History →</a></p>", esc(&self.view.href())));
+        }
         out.push_str("</div>");
         let index = self.view.show == "done"
             || !self.view.q.is_empty()
@@ -1347,80 +1300,6 @@ impl<'a> Plan<'a> {
             },
         ));
         TrustedHtml::owned(out)
-    }
-
-    // ---- Finished since you looked ------------------------------------------------------------
-
-    /// What Mark as seen leaves: the ruled lines, "Nothing new since 04:21", Undo taking the
-    /// look back so what finished lately is drawn again.
-    fn seen_html(&self, seen: u64) -> String {
-        let at = ui::clock(&super::rfc3339(seen));
-        format!(
-            "<section id=\"plan-finished\" class=\"pb-sec pb-seen\" aria-labelledby=\"finished\"{watch}>{head}{form}{state}<input type=\"hidden\" name=\"through\" value=\"0\">{said}</form></section>",
-            watch = self.seen_watch(),
-            head = ui::SectionHead::new("finished", "Finished lately").html(),
-            form = ui::post_form(
-                "mark-seen",
-                "seen-form",
-                &format!("{}/seen", self.view.href())
-            ),
-            state = ui::state(
-                ui::Sketch::Lines,
-                "Nothing new since you looked",
-                &format!("Seen through {at} · <button class=\"quiet\">Undo</button>"),
-                true
-            ),
-            said = ui::form_said("mark-seen"),
-        )
-    }
-    /// The look is this browser's: Mark as seen's answer sets the page's `seen` signal (and
-    /// its cookie, for its next page), and the change reopens the stream on it, which draws
-    /// the plan from that look (Datastar's `data-on-signal-patch`, filtered to `seen`).
-    fn seen_watch(&self) -> String {
-        format!(
-            " data-reopens-stream data-on-signal-patch=\"{}\" data-on-signal-patch-filter=\"{{include: /^seen$/}}\"",
-            esc(&ui::stream_reopen(&self.view.stream_href()))
-        )
-    }
-    fn finished_html(&self) -> String {
-        let head = if self.view.seen.is_some() {
-            "Finished since you looked"
-        } else {
-            "Finished lately"
-        };
-        let through = self
-            .finished
-            .iter()
-            .filter_map(|u| super::timestamp(u.finished()))
-            .max()
-            .unwrap_or(0)
-            .max(self.view.seen.unwrap_or(0));
-        let mark = format!(
-            "{form}<input type=\"hidden\" name=\"through\" value=\"{through}\"><button class=\"quiet\">Mark as seen</button>{said}</form>",
-            form = ui::post_form(
-                "mark-seen",
-                "seen-form",
-                &format!("{}/seen", self.view.href())
-            ),
-            said = ui::form_said("mark-seen"),
-        );
-        let mut out = format!(
-            "<section id=\"plan-finished\" class=\"pb-sec\" aria-labelledby=\"finished\"{watch}>{head}{list}",
-            watch = self.seen_watch(),
-            head = ui::SectionHead::new_html("finished", head).html(),
-            list = finished_list(self.view, &self.finished),
-        );
-        if self.finished_more > 0 {
-            let _ = write!(
-                out,
-                "<p class=\"fin-more\"><a href=\"{}?show=done#done\">{} more</a></p>",
-                esc(&self.view.href()),
-                self.finished_more
-            );
-        }
-        out.push_str(&mark);
-        out.push_str("</section>");
-        out
     }
 
     // ---- At work -------------------------------------------------------------------------------
@@ -1897,28 +1776,6 @@ fn row_counts(rows: &[&Row<'_>]) -> String {
 
 // ---- the plan's parts, drawn here and on `/_ui` -------------------------------------------------
 
-/// A row of Finished: its title linking its page, when it
-/// finished and how long it took at the right (nothing for no time); its steps' states
-/// (`said`, as `data-said` carries them; "" for none).
-pub fn finished_row(at: &str, took: f64, href: &str, title: &str, said: &str) -> String {
-    format!(
-        "<li class=\"fin-r\"{said}><a class=\"fin-t\" href=\"{href}\">{title}</a><span class=\"fin-w\">{at}{took}</span></li>",
-        at = ui::clock(at),
-        // a value set by hand took no time of its own
-        took = if took > 0.0 {
-            format!(" · {}", esc(&ui::duration_text(took)))
-        } else {
-            String::new()
-        },
-        href = esc(href),
-        title = esc(title),
-        said = if said.is_empty() {
-            String::new()
-        } else {
-            format!(" data-said=\"{}\"", esc(said))
-        },
-    )
-}
 /// `unit`'s strip over the last hour to `now` (`unit_steps::Pulse`): its places are the
 /// clock's (`unit_steps::bar`, `mark`), drawn here to `now`, kept at the reader's now by
 /// `nav.js` and left out of a stream's version, so it changes only when the unit does
@@ -2295,22 +2152,6 @@ fn why_waiting(unit: &UnitView) -> String {
         _ => step.waits.first().cloned().unwrap_or_default(),
     })
 }
-/// Finished rows carry only the title, finish time and duration.
-pub fn finished_list(view: &ProjectView, units: &[&UnitView]) -> String {
-    let rows: String = units
-        .iter()
-        .map(|unit| {
-            finished_row(
-                unit.finished(),
-                took(unit),
-                &unit_href(view, unit),
-                unit.whole_heading(),
-                &said_states(unit),
-            )
-        })
-        .collect();
-    format!("<ul class=\"fin\">{rows}</ul>")
-}
 /// Text choices inside the project's page menu, preserving the per-project view cookie.
 pub fn view_links(href: &str, chosen: Option<&str>) -> String {
     let links: String = [
@@ -2396,11 +2237,9 @@ pub fn draw(
     let plan = Plan::new(view);
     let nav = NavView::new(shared, Some(view.project.id), "plan")?;
     let body = body(view, &plan, glance(view, shared)).map_err(render_error)?;
-    // the find and the read cursor are the page's signals: its stream reads them when it opens,
-    // and the find and Mark as seen reopen it on new ones
+    // The find reopens the stream as it is typed.
     let mut signals = serde_json::Map::new();
     signals.insert("q".into(), view.q.clone().into());
-    signals.insert("seen".into(), view.seen.unwrap_or(0).into());
     let frame = Frame {
         head: plan.band(),
         find: plan.find(),
@@ -2585,17 +2424,7 @@ pub async fn needs(
     }
     write::done(&headers)
 }
-#[derive(Deserialize)]
-pub struct SeenForm {
-    /// The finish time (seconds since the epoch) of the last finished unit the page drew.
-    pub through: u64,
-}
-/// `POST /projects/id/<p>/seen`: Mark as seen (or its Undo, `through=0`). This browser's look
-/// at the project's finished units moves to `through`, kept in its cookie (`sluice_seen_<p>`)
-/// for its next page. To the page's form the answer empties its notice and sets the page's
-/// `seen` signal, whose change reopens the stream on the new look (`seen_watch`).
-/// A row's drilldown (`roster_row`), asked for as it opens: its unit's steps and foot, drawn
-/// in place of what it showed (the row's stream never morphs it).
+
 pub async fn drill(
     State(state): State<DashboardState>,
     registry: Option<axum::Extension<super::board::Registry>>,
@@ -2751,29 +2580,4 @@ fn ref_card(view: &ProjectView, kind: &str, key: &str) -> String {
             )
         }
     }
-}
-pub async fn mark_seen(
-    Path(project): Path<ProjectId>,
-    headers: axum::http::HeaderMap,
-    Form(form): Form<SeenForm>,
-) -> Response {
-    let mut response = match super::write::form(&headers) {
-        Some(id) => super::write::events([
-            super::write::notice(&id, ""),
-            crate::streams::StreamEvent::Signals(datastar::prelude::PatchSignals::new(
-                serde_json::json!({ "seen": form.through }).to_string(),
-            )),
-        ]),
-        None => StatusCode::NO_CONTENT.into_response(),
-    };
-    let cookie = format!(
-        "{}={}; Path=/; Max-Age=34560000; SameSite=Lax",
-        seen_cookie(project),
-        form.through
-    );
-    response.headers_mut().append(
-        axum::http::header::SET_COOKIE,
-        cookie.parse().expect("an ASCII cookie"),
-    );
-    response
 }

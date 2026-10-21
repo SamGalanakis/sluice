@@ -351,7 +351,7 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     let (_, plan) = f.get(&plan_href).await;
     let well = plan_html::band(&plan, "plan-needs");
     assert!(
-        plan_html::place(&plan, "first") == "done" && !well.contains("n-stop-first"),
+        plan_html::place(&plan, "first").is_empty() && !well.contains("n-stop-first"),
         "{well}"
     );
     // its dependent is held as before, waiting on earlier work: counted, not a row

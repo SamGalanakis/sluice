@@ -145,7 +145,7 @@ pub fn question(html: &str, message: i64) -> &str {
         .find(|item| item.starts_with(&id))
         .unwrap_or_else(|| panic!("the question {message} in {html}"))
 }
-/// A section: "plan-needs", "plan-finished", "plan-roster", "plan-done".
+/// A section: "plan-needs", "plan-roster", "plan-done".
 pub fn band<'a>(html: &'a str, id: &str) -> &'a str {
     region(html, id)
 }
@@ -174,19 +174,10 @@ pub fn place(html: &str, unit: &str) -> &'static str {
             "running"
         };
     }
-    if finished(html, unit) || done_lines(html, unit) > 0 {
+    if done_lines(html, unit) > 0 {
         return "done";
     }
     ""
-}
-/// Whether a card of Finished since you looked leads to `unit` (its page, or a loose step's).
-pub fn finished(html: &str, unit: &str) -> bool {
-    has_region(html, "plan-finished") && {
-        let cards = band(html, "plan-finished");
-        ["units", "steps"]
-            .iter()
-            .any(|kind| cards.contains(&format!("/{kind}/{unit}\">")))
-    }
 }
 /// How many lines of the Done index lead to `unit` (its unit's page, or a loose step's own).
 pub fn done_lines(html: &str, unit: &str) -> usize {

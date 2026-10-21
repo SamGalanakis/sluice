@@ -115,7 +115,14 @@ pub fn whole_heading(text: &str) -> Option<String> {
             (1..=6).contains(&hashes) && l[hashes..].starts_with(' ')
         })
         .or_else(|| lines().find(|l| !l.starts_with("---") && !l.starts_with("```")))?;
-    Some(whole_title(line)).filter(|t| !t.is_empty())
+    let title = whole_title(line);
+    let hashes = line.chars().take_while(|c| *c == '#').count();
+    let title = if (1..=6).contains(&hashes) && line[hashes..].starts_with(' ') {
+        title
+    } else {
+        prompt_title(&title)
+    };
+    Some(title).filter(|t| !t.is_empty())
 }
 
 /// Name every step and unit of a plan from its step rows: `steps` in position order, each
@@ -229,6 +236,22 @@ pub fn name_plan(
         naming.units.insert(unit.clone(), unit_naming);
     }
     naming
+}
+/// A body used as a title: its first sentence or line, bounded before it reaches a row.
+fn prompt_title(text: &str) -> String {
+    let end = text
+        .char_indices()
+        .find_map(|(at, c)| {
+            if matches!(c, '.' | '!' | '?')
+                && text[at + c.len_utf8()..].starts_with(char::is_whitespace)
+            {
+                Some(at + c.len_utf8())
+            } else {
+                None
+            }
+        })
+        .unwrap_or(text.len());
+    cut(&text[..end], 80)
 }
 /// A step's own title, whole: its doc's first line, else its prompt's title.
 fn own_title(step: &Value, file_title: &mut dyn FnMut(&str) -> Option<String>) -> String {
