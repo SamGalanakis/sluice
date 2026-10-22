@@ -255,6 +255,34 @@ fn long_heard(unit: &UnitView) -> Option<f64> {
         .reduce(f64::max)
 }
 
+/// Home's grouping changes at these deadlines even with no store write. The times drawn
+/// inside a card tick in the browser; retaining it needs no periodic full-board reload.
+pub(super) fn next_brief_change(view: &ProjectView) -> u64 {
+    let now = now();
+    view.units
+        .iter()
+        .filter(|u| !u.done)
+        .flat_map(|unit| {
+            let long = match unit.steps.as_slice() {
+                [step] if unit.recipe.is_empty() && step.running() => step
+                    .timing
+                    .as_ref()
+                    .and_then(|t| epoch(&t.started))
+                    .map(|at| at + LONG_RUN),
+                _ => None,
+            };
+            let quiet = is_long(unit)
+                .then(|| long_heard(unit).map(|at| at + view.long_quiet))
+                .flatten();
+            let wait = last_end(unit).map(|at| at + WAIT_LONG);
+            [long, quiet, wait].into_iter().flatten()
+        })
+        .filter(|at| *at > now)
+        .map(|at| at.ceil() as u64)
+        .min()
+        .unwrap_or(u64::MAX)
+}
+
 impl<'a> Plan<'a> {
     pub fn new(view: &'a ProjectView) -> Self {
         let now = now();

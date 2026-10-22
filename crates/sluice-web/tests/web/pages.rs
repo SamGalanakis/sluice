@@ -479,6 +479,18 @@ async fn home_attention_and_reader_day() {
                 && others.contains(">plain</a>"),
             "{others}"
         );
+        // Reusing Home cards must still show the next project's edit immediately.
+        let almanac_id = n.almanac;
+        f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+            tx.sql().execute("UPDATE projects SET description='The revised spring checklist.' WHERE project_id=?1", [almanac_id.to_string()])?;
+            tx.changed(Some(almanac_id), "projects");
+            Ok(())
+        }).await.unwrap();
+        let (_, updated) = f.get("/").await;
+        assert!(
+            updated.contains("The revised spring checklist."),
+            "{updated}"
+        );
         // the answer's words post from its form
         let response = f
             .router()

@@ -199,12 +199,11 @@ impl HomeView {
                     .any(|s| s.key == format!("ask:{}", q.id()))
             })
         });
-        let mut projects: Vec<HomeProject> = snapshot
-            .projects
-            .iter()
-            .filter(|p| !p.archived)
-            .map(|p| HomeProject::new(p.clone(), boards.get(&p.id)))
-            .collect();
+        let projects = snapshot.projects.iter().filter(|p| !p.archived)
+            .map(|p| HomeProject::new(p.clone(), boards.get(&p.id))).collect();
+        Self::assembled(snapshot, projects, questions, day, now)
+    }
+    fn assembled(snapshot: &DashboardSnapshot, mut projects: Vec<HomeProject>, questions: Vec<threads::MessageItem>, day: Option<day::DayView>, now: u64) -> Self {
         projects.sort_by(|a, b| {
             a.rank()
                 .cmp(&b.rank())
@@ -491,66 +490,72 @@ impl HomeView {
         Ok(TrustedHtml::owned(html))
     }
 }
-/// Everything home reads: the questions (with the nav's snapshot), then each live project's
-/// board and the day, in one snapshot.
+/// The compact Home cards, retained independently: a write in one project must not rebuild
+/// every other project's full plan. Store versions, catalog versions and the observed running
+/// state invalidate a card; the next grouping or silence deadline covers clock thresholds.
+#[derive(Clone, Default)]
+pub(crate) struct CardCache(Arc<std::sync::Mutex<BTreeMap<ProjectId, CachedCard>>>);
+#[derive(Clone)]
+struct CachedCard {
+    token: String,
+    refresh_at: u64,
+    card: HomeProject,
+    aside: Vec<String>,
+}
+/// One snapshot for navigation, current project cards, the day's counts and owner questions.
 pub async fn load(
     state: &DashboardState,
     registry: Option<&board::Registry>,
     zone: i64,
 ) -> Result<(DashboardSnapshot, HomeView), PublicError> {
-    let projects = state.reads.clock_snapshot(|c| {
-        let mut q = c.prepare_cached("SELECT project_id FROM projects WHERE deleted_at IS NULL AND NOT archived AND EXISTS(SELECT 1 FROM steps WHERE steps.project_id=projects.project_id)")?;
-        Ok(q.query_map([], |r| r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
-    }).await.map_err(|e|e.into_public(true))?;
     let now = day::now();
-    // each project's signatures, as its plan page reads them
-    let mut providers = vec![];
-    for raw in projects {
-        let id: ProjectId = raw.parse().map_err(|e| PublicError::Storage {message:format!("{e}")})?;
-        let exact = match registry { Some(r) => r.0.signatures(id).ok(), None => None };
-        let catalog = state.catalog.catalog(Some(id))?;
-        providers.push((id,exact,catalog));
-    }
     let plans = state.plans.clone();
-    let functions = state.catalog.catalog(None)?;
-    let (shared, boards, data, questions) = state
-        .reads
-        .clock_snapshot(move |c| {
-            let shared = load_snapshot(c, functions)?;
-            let mut boards = BTreeMap::new();
-            for (id, exact, catalog) in &providers {
-                // a plan that cannot be read leaves its project to its counts
-                let read = match exact {
-                    Some(exact) => board::load_board(
-                        c,
-                        &shared,
-                        *id,
-                        &plans,
-                        &format!("registry:{}", exact.version),
-                        exact,
-                    ),
-                    None => board::load_board(
-                        c,
-                        &shared,
-                        *id,
-                        &plans,
-                        &format!("catalog:{}", catalog.version),
-                        &board::CatalogSignatures(catalog),
-                    ),
+    let cache = state.home_cards.clone();
+    let catalog = state.catalog.clone();
+    let registry = registry.cloned();
+    let functions = catalog.catalog(None)?;
+    let (shared, cards, data, questions) = state.reads.clock_snapshot(move |c| {
+        let shared = load_snapshot(c, functions)?;
+        let mut cards = Vec::new();
+        let mut aside = BTreeMap::new();
+        let mut versions = c.prepare_cached("SELECT coalesce(sum(version),0),count(*) FROM change_versions WHERE (project_id=?1 OR project_id IS NULL) AND view<>'log'")?;
+        for project in shared.projects.iter().filter(|p| !p.archived) {
+            let id = project.id;
+            let (version, count): (i64,i64) = versions.query_row([id.to_string()], |r| Ok((r.get(0)?,r.get(1)?)))?;
+            let exact = registry.as_ref().and_then(|r|r.0.signatures(id).ok());
+            let signature = exact.as_ref().map(|r|r.version.clone()).unwrap_or(catalog.version(Some(id))?);
+            let token = format!("{version}:{count}:{signature}:{}", serde_json::to_string(project)?);
+            let cached = cache.0.lock().unwrap_or_else(|e|e.into_inner()).get(&id).filter(|card| card.token == token && now < card.refresh_at).cloned();
+            let card = if let Some(card) = cached {
+                card
+            } else {
+                let functions = catalog.catalog(Some(id))?;
+                let read = match &exact {
+                    Some(exact) => board::load_board(c, &shared, id, &plans, &format!("registry:{}", exact.version), exact),
+                    None => board::load_board(c, &shared, id, &plans, &format!("catalog:{}", functions.version), &board::CatalogSignatures(&functions)),
                 };
-                if let Ok((board, _)) = read {
-                    boards.insert(*id, board);
-                }
-            }
-            let data = day::load_brief(c, now)?;
-            let questions = threads::home_questions(c,&shared)?;
-            Ok((shared, boards, data, questions))
-        })
-        .await
-        .map_err(|e| e.into_public(true))?;
-    let day = day::DayView::new(data, None, now, zone);
-    let view = HomeView::from_parts(&shared, &boards, questions, Some(day), now);
-    Ok((shared, view))
+                let board = read.ok().map(|(board,_)| board);
+                let card = CachedCard {
+                    token,
+                    refresh_at: board.as_ref().map(super::plan::next_brief_change).unwrap_or(u64::MAX),
+                    card: HomeProject::new(project.clone(), board.as_ref()),
+                    aside: board.as_ref().map(|b|b.set_aside.iter().map(|s|s.key.clone()).collect()).unwrap_or_default(),
+                };
+                cache.0.lock().unwrap_or_else(|e|e.into_inner()).insert(id,card.clone());
+                card
+            };
+            aside.insert(id,card.aside);
+            cards.push(card.card);
+        }
+        cache.0.lock().unwrap_or_else(|e|e.into_inner()).retain(|id,_| shared.projects.iter().any(|p|p.id==*id && !p.archived));
+        let data = day::load_brief(c, now)?;
+        let mut questions = threads::home_questions(c,&shared)?;
+        questions.retain(|q| !aside.get(&q.project).is_some_and(|keys| keys.iter().any(|key| key==&format!("ask:{}",q.id()))));
+        Ok((shared,cards,data,questions))
+    }).await.map_err(|e|e.into_public(true))?;
+    let day = day::DayView::new(data,None,now,zone);
+    let view = HomeView::assembled(&shared,cards,questions,Some(day),now);
+    Ok((shared,view))
 }
 /// Home's regions: its body, its band and the nav.
 pub async fn home_batch(

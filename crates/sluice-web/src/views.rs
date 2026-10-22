@@ -435,6 +435,7 @@ pub struct DashboardState {
     /// that draws a plan (the board, a step, home's modules, the board program, settings and
     /// the Mermaid) reads it here.
     pub plans: board::PlanCache,
+    pub(crate) home_cards: home::CardCache,
     /// Claude's config home, where its session transcripts are (an agent run's activity):
     /// `CLAUDE_CONFIG_DIR`, else `~/.claude`, as Claude finds it.
     pub claude_home: Option<std::path::PathBuf>,
@@ -450,6 +451,7 @@ impl DashboardState {
             catalog,
             stop: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             plans: board::PlanCache::default(),
+            home_cards: home::CardCache::default(),
             claude_home: sluice_agents::activity::Homes::claude_from_env(),
             long_run_quiet: sluice_runtime::config::DEFAULT_LONG_RUN_QUIET_H * 3600.0,
         }
