@@ -195,7 +195,9 @@ pub struct Headroom {
 }
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MemoryNoticePolicy {
+    /// Working memory as a percentage of the frozen cap, sufficient on its own.
     pub working_percent: f64,
+    /// PSI `some avg10`, actionable only with working memory at least 75% of the cap.
     pub pressure_percent: f64,
 }
 impl Default for MemoryNoticePolicy {

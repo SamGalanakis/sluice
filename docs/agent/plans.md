@@ -852,10 +852,13 @@ throttles a run instead of failing it. Do not treat a bare `SIGKILL` as proof of
 failure.
 
 Memory notices use working memory (`anon + shmem + slab_unreclaimable` from cgroup v2
-`memory.stat`), actual OOM events, or sustained payload memory stalls (PSI `some avg10`).
-By default a notice means working memory is at least 90% of the cap or PSI is at least 10%
-over ten seconds. The host can change `execution.memory_notice_working_percent` and
-`execution.memory_notice_pressure_percent` (percentages above 0 and at most 100), separately
+`memory.stat`) and actual OOM events. By default a notice means an OOM event, working
+memory at least 90% of the cap, or working memory at least 75% of the cap together with
+payload PSI `some avg10` at least 10% over ten seconds. PSI alone never warns: host-wide
+cache reclaim can stall runs far below their caps. An uncapped run warns only on actual OOM
+events. The host can change `execution.memory_notice_working_percent` (the standalone working
+threshold) and `execution.memory_notice_pressure_percent` (the PSI threshold, which also
+requires at least 75% working memory), both percentages above 0 and at most 100, separately
 from admission pressure. File cache (`file - shmem`) stays visible beside working memory in
 status and notices. `usage.memory_max_hits` counts kernel reclaim attempts; a cache-heavy
 build can have thousands with no OOM. That counter or a cached peak alone never warns that

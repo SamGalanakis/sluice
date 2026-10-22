@@ -466,7 +466,11 @@ optional fields, each a value or unlimited; `guardian_memory`, `host_reserve` an
 `memory_notice_working_percent` and `memory_notice_pressure_percent` are
 percentages above 0 and at most 100; `admission_warmup_s` is a number of seconds, 0 or more;
 `load_per_cpu_max` is a number above 0; `warmup_starts` is an integer, at least 1; `cpu_weight`
-is an integer from 1 to 10000. Memory is unlimited at a
+is an integer from 1 to 10000. `memory_notice_working_percent` triggers a live notice at
+that percentage of a run's frozen memory cap (default 90%). `memory_notice_pressure_percent`
+is the PSI `some avg10` threshold (default 10%) for runs also using at least 75% of their cap;
+PSI alone never triggers a live notice. These notice settings are separate from admission
+pressure. Memory is unlimited at a
 level only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`)
 memory in `defaults`, `ceilings` or `total` is refused at load with an error naming the key,
 the size to set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields
@@ -635,14 +639,15 @@ final counters. Live samples also read `memory.stat`, `memory.current` and `memo
 `memory.events max` counts reclaim attempts, including healthy file-cache reclaim; it remains
 in `usage.memory_max_hits` and alone never triggers a notice. A live memory notice requires
 working memory at least `execution.memory_notice_working_percent` of the frozen cap (default
-90%), a sustained stall measured by payload PSI `some avg10` at least
-`execution.memory_notice_pressure_percent` (default 10%, averaged over ten seconds), or an
-actual `memory.events oom`/`oom_kill` event. These thresholds are read from the host's current
-policy; they apply without a restart and are independent of admission thresholds. If policy
+90%), or working memory at least 75% of the cap together with payload PSI `some avg10`
+at least `execution.memory_notice_pressure_percent` (default 10%, averaged over ten seconds),
+or an actual `memory.events oom`/`oom_kill` event. PSI alone never triggers a notice: host-wide
+cache reclaim can stall a run far below its cap. These thresholds are read from the host's
+current policy; they apply without a restart and are independent of admission thresholds. If policy
 is invalid, admission holds and live notices use the default thresholds, so configuration
 errors cannot hide OOM kills or failed forks. An
-unlimited run has no working-memory percentage trigger; PSI and OOM still apply. Missing
-memory composition or PSI is unknown, never inferred from `max` or an old peak. An OOM kill
+unlimited run has no working-memory percentage or PSI trigger; actual OOM events still apply.
+Missing memory composition or PSI is unknown, never inferred from `max` or an old peak. An OOM kill
 still warns even if the live memory reading is unavailable. The notice states working memory,
 cap, file cache, sampled peak working memory, peak including file cache, PSI and OOM events,
 without predicting a kill from cache reclaim.

@@ -119,15 +119,17 @@ pub fn run_notices(
             format!("{who} ran out of memory at {cap} ({}); the kernel killed its payload and Sluice stopped the run. Retry with less parallelism, or ask for more explicitly with a larger limits.memory.", usage.memory_summary()),
         ));
     } else if !ended && let Some((memory, policy)) = memory {
-        let working_high = memory
+        let working_percent = memory
             .working_bytes
             .zip(limits.memory_max_bytes)
-            .is_some_and(|(working, cap)| {
-                working as f64 / cap as f64 * 100.0 >= policy.working_percent
-            });
-        let stalled = memory
-            .pressure_some_avg10
-            .is_some_and(|pressure| pressure >= policy.pressure_percent);
+            .map(|(working, cap)| working as f64 / cap as f64 * 100.0);
+        let working_high = working_percent.is_some_and(|p| p >= policy.working_percent);
+        // Host-wide reclaim can stall a run far below its cap. PSI is actionable only
+        // with substantial working memory; an uncapped or unknown reading cannot qualify.
+        let stalled = working_percent.is_some_and(|p| p >= 75.0)
+            && memory
+                .pressure_some_avg10
+                .is_some_and(|pressure| pressure >= policy.pressure_percent);
         if memory.oom_events > 0 || working_high || stalled {
             let cap = limits
                 .memory_max_bytes
