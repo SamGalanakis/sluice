@@ -360,8 +360,8 @@ fn load_inner(c: &rusqlite::Connection, project: Option<ProjectId>, now: u64, br
         if let (Ok(id), Some(at)) = (
             r.get::<_, String>(0)?.parse::<ProjectId>(),
             r.get::<_, Option<String>>(1)?,
-        ) {
-            if !at.is_empty() { last_before.insert(id, at); }
+        ) && !at.is_empty() {
+            last_before.insert(id, at);
         }
     }
     Ok(DayData {
