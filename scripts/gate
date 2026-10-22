@@ -2,6 +2,7 @@
 """The shared local/ship gate and the source-to-slow-suite map."""
 import argparse
 import fnmatch
+import os
 import pathlib
 import re
 import subprocess
@@ -191,22 +192,25 @@ def run_gate(repo, base, head, *, dry=False, all_slow=False, covered_groups=None
     # Keep the command definition here: scripts/check and ship both call this function.
     commands = [] if covered_groups is not None else [
         ['fmt', '--all', '--check'],
-        ['clippy', '--workspace', '--all-targets', '--locked', '--', '-D', 'warnings'],
-        ['nextest', 'run', '--workspace', '--all-targets', '--locked'],
-        ['test', '--workspace', '--doc', '--locked'],
+        ['clippy', '--workspace', '--all-targets', '--locked', '-j', '4', '--', '-D', 'warnings'],
+        ['nextest', 'run', '--workspace', '--all-targets', '--locked', '--build-jobs', '4', '-j', '4'],
+        ['test', '--workspace', '--doc', '--locked', '-j', '4'],
     ]
     selected_tests = sorted({test for name in reasons for test in tests[name]})
     if selected_tests:
         expression = 'test(/(^|::)(' + '|'.join(selected_tests) + ')$/)'
-        commands.append(['nextest', 'run', '--workspace', '--all-targets', '--locked',
+        commands.append(['nextest', 'run', '--workspace', '--all-targets', '--locked', '--build-jobs', '4', '-j', '4',
                          '--profile', 'slow', '-E', expression])
+    # Tests create their own homes and identities. A lane's SLUICE_STEP/author/capability
+    # must not become the author or callback context of a test fixture.
+    env = {k: v for k, v in os.environ.items() if not k.startswith('SLUICE_') or k == 'SLUICE_TEST'}
     started = time.monotonic()
     for command in commands:
         print('gate: $ cargo ' + ' '.join(command), file=sys.stderr, flush=True)
         if dry:
             continue
         phase = time.monotonic()
-        subprocess.run(['cargo', *target, *command], cwd=repo, check=True)
+        subprocess.run(['cargo', *target, *command], cwd=repo, env=env, check=True)
         print(f'gate: {command[0]} {"slow" if "slow" in command else ""} finished in {time.monotonic() - phase:.3f}s', file=sys.stderr, flush=True)
     if not dry:
         print(f'gate: passed in {time.monotonic() - started:.3f}s', file=sys.stderr, flush=True)

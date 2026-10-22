@@ -101,9 +101,10 @@ inherit lane runtime or compiler settings. Nested scripts share the service; int
 stops it, allowing PID cleanup before systemd reaps remaining descendants. Test mode preserves
 fixture PATH/home and test controls; process-fixture deploys remain plain processes so their
 tests retain ownership of persistent service PIDs. The user manager is required; there is no
-fallback into the caller's capped cgroup.
+fallback into the caller's capped cgroup. The gate drops inherited `SLUICE_*` identity and
+callback context (retaining test mode); build and test parallelism is capped at four.
 
-**`scripts/build-release <prefix>`** runs `cargo build -j 8 --workspace --bins --release --locked`
+**`scripts/build-release <prefix>`** runs `cargo build -j 4 --workspace --bins --release --locked`
 with its target dir under `<prefix>/.build/target`, stages `bin/sluice`, `python/`, the private
 tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.build`) and
 `assets/`, asks the staged binary its schema (`sluice home schema`, which prints `{"schema": n}`

@@ -90,7 +90,9 @@ collected transient user service in `app.slice`, outside the caller's workload c
 launcher connects through `/run/user/<uid>/bus` and gives the work an explicit environment:
 the account's home, UTF-8 locale, a PATH including `~/.cargo/bin`, `~/.local/bin`, `~/bin` and
 system tools, plus the requested home, installation and deploy/build controls. Ship also uses
-that explicit bus address for its gate and adoption checks. Lane runtime, compiler and engine settings are not inherited. Nested shipping scripts share that service.
+that explicit bus address for its gate and adoption checks. The gate removes inherited lane
+identity and callback context; builds and tests use at most four jobs. Lane runtime, compiler
+and engine settings are not inherited. Nested shipping scripts share that service.
 Test mode additionally preserves fixture PATH/home and test controls; process-fixture deploys
 stay in their caller because their tests own the persistent services by PID.
 
