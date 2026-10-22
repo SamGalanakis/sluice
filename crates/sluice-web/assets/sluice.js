@@ -108,7 +108,9 @@ rocket("sluice-drawer", {
         detail.dataset.step = sid;
         pinned = true;  // a new step's log starts following again
       }
-      focusFrame = requestAnimationFrame(() => drawer.focus({ preventScroll: true }));
+      focusFrame = requestAnimationFrame(() => {
+        if (!drawer.contains(document.activeElement)) drawer.focus({ preventScroll: true });
+      });
       // once the page has made room, bring what the plan shows of it into view beside the drawer
       if (!PHONE.matches) {
         scrollTimer = setTimeout(() => onPlan(sid)

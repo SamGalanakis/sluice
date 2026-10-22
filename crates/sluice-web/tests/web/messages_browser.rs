@@ -1,7 +1,7 @@
 //! Real Chromium gate for the message pages and the page's times: a note is marked read only
 //! when the owner asks ("Mark read" on its card or its thread, or "Mark all read"), never by
-//! being on screen or by its thread being opened; once marked it is kept under "Read today",
-//! which the server draws from the stored read marks, so it survives a reload. A time a stream
+//! being on screen or by its thread being opened; once marked it stays out of the inbox
+//! through a reload and can be read in History. A time a stream
 //! patch writes back in the server's words reads in the page's words again at once.
 use crate::board_fixture;
 use crate::chrome;
@@ -228,9 +228,10 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         assert_eq!(said, "Closed just now: Land it before the rename? Read the threadUndo");
         assert_eq!(closes(&f), 1);
         // on the inbox the same: its line in the card's place, focused, the count down by one
+        browser.send("Page.addScriptToEvaluateOnNewDocument", serde_json::json!({"source": "document.addEventListener('datastar-fetch', e => { if(e.detail.type==='datastar-patch-signals' && JSON.parse(e.detail.argsRaw?.signals??'{}').rel) window.streamReady=true; });"})).unwrap();
         browser.navigate(&format!("{base}/inbox")).unwrap();
         browser
-            .wait("document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
+            .wait("window.streamReady && document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
         // Two whole cards at once: a constant message-0 anchor must fail this check.
         let card_ids = browser.eval("[...document.querySelectorAll('#inbox-items article.q-card[id]')].map(a => a.id)").unwrap();

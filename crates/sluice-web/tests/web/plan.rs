@@ -806,7 +806,7 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
     }).await.unwrap();
     browser = tokio::task::spawn_blocking(move || {
         browser.wait("!!document.querySelector('#u-new') && document.querySelector('#u-e-096')?.parentElement.matches('.ro')").unwrap();
-        assert_eq!(browser.eval("document.getElementById('u-e-096').open && document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open").unwrap(), true);
+        assert_eq!(browser.eval("document.getElementById('u-e-096').open && document.getElementById(entry).open && !document.getElementById(scan).open && sessionStorage.getItem('sluice:plan-fold:'+document.querySelector('sluice-board').dataset.project+':'+scan+'-quiet')==='open'").unwrap(), true);
         assert_eq!(browser.eval("order().at(-1)").unwrap(), "new");
         // The order menu changes the cookie before reconnecting the real stream.
         browser.eval("document.querySelector('#plan-band details.dm').open = true; [...document.querySelectorAll('.order-options [role=menuitemradio]')][1].click()").unwrap();

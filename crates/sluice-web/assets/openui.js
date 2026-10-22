@@ -216,6 +216,8 @@ export function answered(area, closed) {
     note.focus();
     // the drawing it was answered in (`Conversation::slot`: "ov-" on a step's Overview)
     held = { q: note.dataset.q ?? "", slot: area.id.replace(/answer-.*$/, ""), until: Date.now() + 60000 };
+    // The stream may have replaced the optimistic line before this animation frame.
+    keepFocus();
   });
   if (area.dataset.ownerQuestion !== "true") return;
   const badge = document.querySelector("#nav-inbox .count");
