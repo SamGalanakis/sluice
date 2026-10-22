@@ -271,6 +271,9 @@ async fn slow_chromium_a_patch_keeps_the_action_the_more_menu_and_a_refused_fiel
     let mut browser = tokio::task::spawn_blocking(move || {
         let mut browser = Chrome::open(&page).unwrap();
         browser.wait("document.querySelector('#step-detail .dm-acts form:has(input[value=cancel]) button')").unwrap();
+        // Opening the drawer focuses it on the next animation frame. Let that finish
+        // before focusing Cancel so this assertion observes the message patch alone.
+        browser.wait("document.activeElement === document.querySelector('#drawer')").unwrap();
         // the running step's Cancel, in its head's open ⋯: the summary the server draws, focused
         browser.eval("document.querySelector('#step-detail .sh-name details.dm').open=true;window.cancel=document.querySelector('#step-detail .dm-acts form:has(input[value=cancel]) button');cancel.focus();window.sver=document.querySelector('#step-detail').outerHTML.length").unwrap();
         browser
