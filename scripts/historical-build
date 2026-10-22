@@ -1,0 +1,158 @@
+#!/usr/bin/env python3
+"""Build immutable cutover fixtures once per host, or prune unselected revisions."""
+import argparse
+import contextlib
+import fcntl
+import hashlib
+import json
+import pathlib
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = pathlib.Path('/workspace/.cargo-targets/sluice-historical')
+REPO = pathlib.Path(__file__).resolve().parent.parent
+
+
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(REPO), *args], text=True).strip()
+
+
+@contextlib.contextmanager
+def locked(root, key):
+    # Locks live outside entries and are never unlinked: waiters must share an inode.
+    locks = root / '.locks'
+    locks.mkdir(parents=True, exist_ok=True)
+    with (locks / key).open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        yield
+
+
+def selected_revisions():
+    selected = set()
+    for sha in git('rev-list', '--first-parent', 'HEAD').splitlines():
+        source = git('show', sha + ':crates/sluice-store/src/schema.rs')
+        if (not any(schema == 1 for schema, _ in selected)
+                and 'pub const SCHEMA_VERSION: i64 = 1;' in source
+                and git('ls-tree', sha, 'crates/sluice-model/src/plan.rs')):
+            selected.add((1, sha))
+        if (not any(schema == 3 for schema, _ in selected)
+                and 'pub const SCHEMA_VERSION: i64 = 3;' in source):
+            selected.add((3, sha))
+        if len(selected) == 2:
+            break
+    if len(selected) != 2:
+        sys.exit('historical-build: need schema-1 and schema-3 ancestors before pruning')
+    return {sha for _, sha in selected}
+
+
+def prune(root, dry):
+    selected = selected_revisions()
+    if not root.exists():
+        return
+    # Builders hold a shared lease through publication. Pruning takes an exclusive one;
+    # run it with no durability gates active (callers may still be using returned paths).
+    with (root / '.lease').open('a') as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        for entry in sorted(root.iterdir()):
+            match = re.fullmatch(r'([0-9a-f]{40})(?:-harness-[0-9a-f]{64})?', entry.name)
+            if match and match[1] not in selected:
+                print(('would prune ' if dry else 'prune ') + str(entry))
+                if not dry:
+                    shutil.rmtree(entry)
+            elif entry.name.startswith('.stage-') and entry.is_dir():
+                print(('would prune ' if dry else 'prune ') + str(entry))
+                if not dry:
+                    shutil.rmtree(entry)
+
+
+def build(root, revision, schema):
+    sha = git('rev-parse', '--verify', revision + '^{commit}')
+    key, name = sha, 'sluice'
+    harness = REPO / 'tools/cutover-rehearsal'
+    if schema is not None:
+        # Include feature selection as well as every source byte in the harness key.
+        digests = {p.relative_to(harness).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in sorted(harness.rglob('*')) if p.is_file() and '__pycache__' not in p.parts}
+        fingerprint = hashlib.sha256(json.dumps([schema, digests], sort_keys=True).encode()).hexdigest()
+        key += '-harness-' + fingerprint
+        name = 'cutover-rehearsal'
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / '.lease').open('a') as lease:
+        fcntl.flock(lease, fcntl.LOCK_SH)
+        with locked(root, key):
+            entry = root / key
+            binary = entry / name
+            if (entry / 'complete').is_file() and (entry / 'complete').read_text() == key + '\n' and binary.is_file():
+                print('historical-build: hit ' + key, file=sys.stderr)
+                return binary
+            # A missing completion marker is never a hit, even if a binary exists.
+            if entry.exists():
+                shutil.rmtree(entry)
+            print('historical-build: build ' + key, file=sys.stderr)
+            with tempfile.TemporaryDirectory(prefix='.stage-', dir=root) as staging:
+                stage = pathlib.Path(staging)
+                source, target = stage / 'src', stage / 'target'
+                source.mkdir()
+                with subprocess.Popen(['git', '-C', str(REPO), 'archive', sha], stdout=subprocess.PIPE) as archive:
+                    subprocess.run(['tar', '-x', '-C', str(source)], stdin=archive.stdout, check=True)
+                    archive.stdout.close()
+                    if archive.wait():
+                        sys.exit('historical-build: git archive failed')
+                command = ['cargo', 'build', '-j', '4', '--bin', name, '--target-dir', str(target),
+                           '--message-format=json-render-diagnostics']
+                if schema is None:
+                    command += ['-p', 'sluice', '--locked']
+                else:
+                    destination = source / 'tools/cutover-rehearsal'
+                    if destination.exists():
+                        shutil.rmtree(destination)
+                    shutil.copytree(harness, destination, ignore=shutil.ignore_patterns('__pycache__'))
+                    shutil.copyfile(source / 'Cargo.lock', destination / 'Cargo.lock')
+                    command += ['--manifest-path', str(destination / 'Cargo.toml')]
+                    if schema >= 3:
+                        command += ['--no-default-features']
+                    if schema >= 4:
+                        command += ['--features', 'bounded-execution']
+                built = subprocess.run(command, cwd=source, stdout=subprocess.PIPE, text=True, check=True)
+                executable = None
+                for line in built.stdout.splitlines():
+                    try:
+                        message = json.loads(line)
+                    except ValueError:
+                        continue
+                    if message.get('target', {}).get('name') == name and message.get('executable'):
+                        executable = pathlib.Path(message['executable'])
+                if executable is None or not executable.is_relative_to(target) or not executable.is_file():
+                    sys.exit('historical-build: cargo names no executable inside ' + str(target))
+                shutil.copy2(executable, stage / name)
+                # Publish only runnable artifacts. Private incremental targets are not seeded
+                # into other worktrees, and need not occupy disk for the cache's lifetime.
+                shutil.rmtree(source)
+                shutil.rmtree(target)
+                (stage / 'complete').write_text(key + '\n')
+                stage.rename(entry)
+            return binary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--cache-root', type=pathlib.Path, default=ROOT,
+                        help='cache directory (default: %(default)s)')
+    commands = parser.add_subparsers(dest='command', required=True)
+    builder = commands.add_parser('build')
+    builder.add_argument('--revision', required=True)
+    builder.add_argument('--harness-schema', type=int)
+    pruner = commands.add_parser('prune', help='run only when no durability gates are active')
+    pruner.add_argument('--dry-run', action='store_true')
+    args = parser.parse_args()
+    if args.command == 'prune':
+        prune(args.cache_root, args.dry_run)
+    else:
+        print(build(args.cache_root.resolve(), args.revision, args.harness_schema))
+
+
+if __name__ == '__main__':
+    main()

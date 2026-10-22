@@ -54,6 +54,7 @@ else:
 
 # The cargo-target-dir shim configures this root; metadata is the authority for each checkout.
 targets_root = pathlib.Path('/workspace/.cargo-targets').resolve()
+historical_cache = (targets_root / 'sluice-historical').resolve()
 def cargo_target(checkout):
     result = subprocess.run(['cargo', 'metadata', '--format-version', '1', '--no-deps'],
                             cwd=checkout, capture_output=True, text=True)
@@ -67,17 +68,17 @@ def cleanup():
     if temporary is None: return
     if dry:
         say('cleanup: would resolve %s/tree cargo target with cargo metadata --format-version 1 --no-deps '
-            'and remove it only under %s, preserving %s cargo target' % (temporary, targets_root, script_repo))
+            'and remove it only under %s, preserving %s cargo target and %s' % (temporary, targets_root, script_repo, historical_cache))
         return
     try:
         if work.exists():
             target = cargo_target(work)
-            protected = {cargo_target(script_repo)}
+            protected = {cargo_target(script_repo), historical_cache}
             if worktree != script_repo: protected.add(cargo_target(worktree))
             if target == targets_root or not target.is_relative_to(targets_root):
                 raise ValueError('target is not inside %s: %s' % (targets_root, target))
             if any(target == own or target in own.parents or own in target.parents for own in protected):
-                raise ValueError('target overlaps a repository cargo target: %s' % target)
+                raise ValueError('target overlaps a protected repository target or historical cache: %s' % target)
             if target.exists():
                 shutil.rmtree(target)
                 say('removed temporary cargo target %s' % target)

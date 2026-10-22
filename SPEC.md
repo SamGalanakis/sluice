@@ -177,8 +177,18 @@ Shipping another ref uses a temporary checkout. On success or failure, ship read
 `target_directory` with `cargo metadata --format-version 1 --no-deps` and removes that target
 before removing the checkout. It refuses targets outside the shim's configured
 `/workspace/.cargo-targets` root, the root itself, or any target overlapping the script or
-invoking checkout's own Cargo target, and reports removals or refusals. Shipping the current
-checkout removes no target. `--dry-run` prints the cleanup it would perform and removes nothing.
+invoking checkout's own Cargo target or the shared historical build cache, and reports removals
+or refusals. Shipping the current checkout removes no target. `--dry-run` prints the cleanup it would perform and removes nothing.
+
+Historical cutover test binaries are cached per immutable Git revision in
+`/workspace/.cargo-targets/sluice-historical`; rehearsal harnesses also key on their source
+fingerprint and schema features. `scripts/historical-build` serializes each key with a file
+lock and publishes only a completed build by renaming a staging directory. Failed or
+interrupted builds are never cache hits. This caches runnable artifacts, without copying or
+hardlinking lane Cargo targets. Ship's temporary-target cleanup preserves this cache.
+With no durability gates active, `scripts/historical-build prune [--dry-run]` removes revisions
+no longer selected by the schema-1 and schema-3 cutover scenarios and abandoned staging
+directories; it preserves the lock files.
 
 A failure stopping the old services (step 5) leaves the installation fenced and says so. A
 failure after the stop, in steps 6 to 9, rolls back when the previous selection serves the same

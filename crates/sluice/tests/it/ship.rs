@@ -46,6 +46,13 @@ fn slow_ship_cleans_temporary_targets_and_preserves_repository_and_unsafe_target
     let temporary = scratch.path().join("temporary");
     let own = targets.path().join("repository");
     let outside = scratch.path().join("outside");
+    let historical_root = Path::new("/workspace/.cargo-targets/sluice-historical");
+    fs::create_dir_all(historical_root).unwrap();
+    let historical = tempfile::Builder::new()
+        .prefix("ship-protected-")
+        .tempdir_in(historical_root)
+        .unwrap();
+    let historical_target = historical.path().to_path_buf();
     for dir in [
         &repo.join("scripts"),
         &repo.join("crates/sluice-store/src"),
@@ -178,6 +185,7 @@ else:
         ("failure", "candidate", &target, false),
         ("failure", "candidate", &own, false),
         ("failure", "candidate", &outside, false),
+        ("failure", "candidate", &historical_target, false),
         ("failure", "candidate", &symlink, false),
         ("metadata-failure", "candidate", &target, false),
         ("failure", "HEAD", &target, false),

@@ -6,7 +6,7 @@
 //!
 //! The cutover needs two releases: the old one the home runs (schema 1) and the candidate. The
 //! old release is the last schema-1 ancestor with the legacy compiler on the first-parent
-//! history, built once into the target directory, and the candidate is this build.
+//! history, built once in the host historical cache, and the candidate is this build.
 use crate::executable;
 use crate::install_support as support;
 use serde_json::{Value, json};
@@ -93,124 +93,164 @@ fn old_revision() -> &'static str {
     })
 }
 
-fn old_binary_at(sha: &str) -> PathBuf {
-    let repo = repo();
-    let cache = target().join("cutover-old").join(sha);
-    std::fs::create_dir_all(&cache).unwrap();
-    // One build per schema-1 revision, whichever test asks first.
-    let lock = std::fs::File::create(cache.join("lock")).unwrap();
-    lock.lock().unwrap();
-    // Ignore cached paths from before legacy builds had their own target directory.
-    let path = cache.join("binary");
-    if let Ok(binary) = std::fs::read_to_string(&path).map(PathBuf::from)
-        && binary.starts_with(cache.join("target"))
-        && binary.is_file()
-    {
-        return binary;
+fn historical_build(sha: &str, harness_schema: Option<u32>) -> PathBuf {
+    let mut command = Command::new(repo().join("scripts/historical-build"));
+    command.args(["build", "--revision", sha]);
+    if let Some(schema) = harness_schema {
+        command.args(["--harness-schema", &schema.to_string()]);
     }
-    let source = cache.join("src");
-    let _ = std::fs::remove_dir_all(&source);
-    std::fs::create_dir_all(&source).unwrap();
-    let mut archive = Command::new("git")
-        .arg("-C")
-        .arg(&repo)
-        .args(["archive", sha])
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let status = Command::new("tar")
-        .arg("-x")
-        .arg("-C")
-        .arg(&source)
-        .stdin(archive.stdout.take().unwrap())
-        .status()
-        .unwrap();
+    let output = command.output().unwrap();
     assert!(
-        status.success() && archive.wait().unwrap().success(),
-        "unpacking {sha}"
+        output.status.success(),
+        "historical build: {}",
+        text(&output)
     );
-    let built = Command::new("cargo")
-        .current_dir(&source)
-        .env_remove("CARGO_TARGET_DIR")
-        .env_remove("CARGO_BUILD_TARGET_DIR")
-        .args([
-            "build",
-            "-j",
-            "4",
-            "-p",
-            "sluice",
-            "--bin",
-            "sluice",
-            "--locked",
-            "--message-format=json-render-diagnostics",
-        ])
-        .arg("--target-dir")
-        .arg(cache.join("target"))
-        .output()
-        .unwrap();
-    assert!(built.status.success(), "building {sha}: {}", text(&built));
-    let binary = String::from_utf8_lossy(&built.stdout)
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|message| message["target"]["name"] == "sluice")
-        .find_map(|message| message["executable"].as_str().map(PathBuf::from))
-        .unwrap_or_else(|| panic!("building {sha} names no sluice executable"));
-    assert!(
-        binary.starts_with(cache.join("target")),
-        "{}",
-        binary.display()
-    );
-    std::fs::write(&path, binary.to_string_lossy().as_bytes()).unwrap();
-    binary
+    // Retain cache hit/build evidence in nextest's successful-test output when requested.
+    eprint!("{}", String::from_utf8_lossy(&output.stderr));
+    PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
+}
+
+fn old_binary_at(sha: &str) -> PathBuf {
+    historical_build(sha, None)
 }
 
 fn old_harness_at(sha: &str, schema: u32) -> PathBuf {
-    let _ = old_binary_at(sha);
-    let cache = target().join("cutover-old").join(sha);
-    let lock = std::fs::File::create(cache.join("harness.lock")).unwrap();
-    lock.lock().unwrap();
-    let binary = cache.join("target/debug/cutover-rehearsal");
-    let mut digests = BTreeMap::new();
-    let current = repo().join("tools/cutover-rehearsal");
-    files(&current, &current, &mut digests);
-    let fingerprint = sluice_store::artifacts::fingerprint(&serde_json::to_vec(&digests).unwrap());
-    let marker = cache.join("harness-source");
-    if binary.is_file() && std::fs::read_to_string(&marker).ok().as_deref() == Some(&fingerprint) {
-        return binary;
+    historical_build(sha, Some(schema))
+}
+
+// An incomplete entry must not let another worktree use an interrupted build.
+// Exercise the cache's real entry point with cheap build outputs, including a failed build.
+#[test]
+fn historical_build_publishes_complete_artifacts_across_worktrees() {
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
+    let checkout = root.join("repo");
+    for directory in [
+        "scripts",
+        "crates/sluice-store/src",
+        "crates/sluice-model/src",
+        "tools/cutover-rehearsal",
+    ] {
+        std::fs::create_dir_all(checkout.join(directory)).unwrap();
     }
-    let source = cache.join("src");
-    let harness = source.join("tools/cutover-rehearsal");
-    copy_tree(&repo().join("tools/cutover-rehearsal"), &harness);
-    std::fs::copy(source.join("Cargo.lock"), harness.join("Cargo.lock")).unwrap();
-    let mut command = Command::new("cargo");
-    command
-        .current_dir(&source)
-        .args([
-            "build",
-            "-j",
-            "4",
-            "--bin",
-            "cutover-rehearsal",
-            "--manifest-path",
-        ])
-        .arg(harness.join("Cargo.toml"))
-        .arg("--target-dir")
-        .arg(cache.join("target"));
-    if schema >= 3 {
-        command.arg("--no-default-features");
-    }
-    if schema >= 4 {
-        command.args(["--features", "bounded-execution"]);
-    }
-    let built = command.output().unwrap();
-    assert!(
-        built.status.success(),
-        "historical rehearsal harness: {}",
-        text(&built)
+    let script = checkout.join("scripts/historical-build");
+    executable::write(
+        &script,
+        include_str!("../../../../scripts/historical-build"),
     );
-    assert!(binary.is_file());
-    std::fs::write(marker, fingerprint).unwrap();
-    binary
+    std::fs::write(checkout.join("Cargo.lock"), "fixture").unwrap();
+    std::fs::write(checkout.join("crates/sluice-model/src/plan.rs"), "legacy").unwrap();
+    std::fs::write(checkout.join("tools/cutover-rehearsal/source"), "first").unwrap();
+    let schema = checkout.join("crates/sluice-store/src/schema.rs");
+    std::fs::write(&schema, "pub const SCHEMA_VERSION: i64 = 1;").unwrap();
+    git(&checkout, &["init", "-q"]);
+    git(&checkout, &["add", "."]);
+    git(&checkout, &["commit", "-qm", "Schema one"]);
+    let sha = git(&checkout, &["rev-parse", "HEAD"]);
+    std::fs::write(&schema, "pub const SCHEMA_VERSION: i64 = 3;").unwrap();
+    git(&checkout, &["commit", "-qam", "Schema three"]);
+    let other = root.join("other");
+    git(
+        &checkout,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            other.to_str().unwrap(),
+        ],
+    );
+    let bin = root.join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    executable::write(
+        bin.join("cargo"),
+        r#"#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv
+name = args[args.index('--bin') + 1]
+target = pathlib.Path(args[args.index('--target-dir') + 1]) / 'debug'
+target.mkdir(parents=True)
+(target / name).write_text('complete artifact')
+with open(os.environ['BUILD_RECORD'], 'a') as record: record.write(name + '\n')
+if os.environ.get('FAIL_BUILD'): sys.exit(1)
+print(json.dumps({'target': {'name': name}, 'executable': str(target / name)}))
+"#,
+    );
+    let path =
+        std::env::join_paths([bin, PathBuf::from("/usr/bin"), PathBuf::from("/bin")]).unwrap();
+    let cache = root.join("cache");
+    let partial = cache.join(&sha);
+    std::fs::create_dir_all(&partial).unwrap();
+    std::fs::write(partial.join("sluice"), "interrupted artifact").unwrap();
+    let record = root.join("builds");
+    let command = |repo: &Path| {
+        let mut command = Command::new(repo.join("scripts/historical-build"));
+        command
+            .args(["--cache-root"])
+            .arg(&cache)
+            .args(["build", "--revision", &sha])
+            .env("PATH", &path)
+            .env("BUILD_RECORD", &record);
+        command
+    };
+    let failed = command(&checkout).env("FAIL_BUILD", "1").output().unwrap();
+    assert!(!failed.status.success(), "{}", text(&failed));
+    assert!(!partial.exists());
+    let children: Vec<_> = [&checkout, &other, &other]
+        .into_iter()
+        .map(|repo| {
+            command(repo)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    for child in children {
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        let binary = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
+        assert_eq!(
+            std::fs::read_to_string(binary).unwrap(),
+            "complete artifact"
+        );
+    }
+    // One failed attempt, then one successful build shared by all three callers.
+    assert_eq!(
+        std::fs::read_to_string(&record).unwrap(),
+        "sluice\nsluice\n"
+    );
+    let harness = |schema: &str| {
+        let output = command(&other)
+            .args(["--harness-schema", schema])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let first = harness("1");
+    assert_eq!(harness("1"), first);
+    assert_ne!(harness("3"), first);
+    std::fs::write(other.join("tools/cutover-rehearsal/source"), "changed").unwrap();
+    assert_ne!(harness("1"), first);
+    assert_eq!(std::fs::read_to_string(&record).unwrap().lines().count(), 5);
+    let stale = cache.join("0".repeat(40));
+    std::fs::create_dir(&stale).unwrap();
+    let abandoned = cache.join(".stage-interrupted");
+    std::fs::create_dir(&abandoned).unwrap();
+    for dry in [true, false] {
+        let mut command = Command::new(&script);
+        command.arg("--cache-root").arg(&cache).arg("prune");
+        if dry {
+            command.arg("--dry-run");
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{}", text(&output));
+        assert_eq!(stale.exists(), dry);
+        assert_eq!(abandoned.exists(), dry);
+        assert!(partial.join("sluice").is_file());
+        assert!(cache.join(".locks").join(&sha).is_file());
+    }
 }
 
 fn copy_tree(from: &Path, to: &Path) {

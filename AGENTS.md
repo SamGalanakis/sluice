@@ -14,6 +14,15 @@
   `/workspace/.cargo-targets`, where ship can clean them; the gate uses a real `target/`
   directory (symlinks change canonical binary paths). Under multi-lane load use
   `NEXTEST_TEST_THREADS=4`; do not change host Cargo settings or set `CARGO_*` variables.
+- Historical cutover fixtures are an exception to lane-local builds: `scripts/historical-build`
+  caches runnable outputs for immutable Git revisions under
+  `/workspace/.cargo-targets/sluice-historical`, with harnesses keyed by source and schema features.
+  This is not cross-worktree target seeding: no lane target is copied or hardlinked. Builds take
+  a per-key file lock and publish a completed staging directory by rename; ship cleanup protects
+  the cache. When no durability gates are active, run `scripts/historical-build prune --dry-run`
+  then `scripts/historical-build prune` to remove revisions no longer selected by `old_revision()`
+  or the normalized schema-3 cutover scenario, plus interrupted staging directories. Lock files
+  stay in place so concurrent waiters always share one inode.
 - Timing seams are direct Rust APIs, never home settings: `Notifier::with_retry_timing`,
   `Claude::with_delivery_timing`, `Devin::with_delivery_timing` and
   `DashboardState::with_clock`. Dashboard `Clock::tokio` ties wall time to Tokio time;
