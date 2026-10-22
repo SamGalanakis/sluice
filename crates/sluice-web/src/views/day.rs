@@ -234,6 +234,13 @@ pub fn load(
     project: Option<ProjectId>,
     now: u64,
 ) -> sluice_store::Result<DayData> {
+    load_inner(c, project, now, false)
+}
+/// Home needs the day's counts and endpoints, without each run's number or prompt title.
+pub fn load_brief(c: &rusqlite::Connection, now: u64) -> sluice_store::Result<DayData> {
+    load_inner(c, None, now, true)
+}
+fn load_inner(c: &rusqlite::Connection, project: Option<ProjectId>, now: u64, brief: bool) -> sluice_store::Result<DayData> {
     let mut projects = vec![];
     let mut q = c.prepare_cached(
         "SELECT project_id,name,paused,archived FROM projects WHERE deleted_at IS NULL ORDER BY name",
@@ -258,9 +265,7 @@ pub fn load(
     let since = super::rfc3339(now.saturating_sub((HOURS + 1) * 3600 + 14 * 3600));
     let only = project.map(|p| p.to_string()).unwrap_or_default();
     let mut q = c.prepare_cached(
-        "WITH numbered AS (SELECT r.project_id,r.run_id,r.step_id,r.unit,r.item_index,coalesce(r.started_at,r.created_at) AS began,r.finished_at,r.result,row_number() OVER (PARTITION BY r.project_id,r.step_id ORDER BY r.created_at,r.run_id) AS n FROM runs r WHERE r.step_id IS NOT NULL AND (?1='' OR r.project_id=?1)) \
-         SELECT n.project_id,n.run_id,n.step_id,coalesce(n.unit,s.unit,''),n.n,n.item_index,n.began,n.finished_at,json_extract(n.result,'$.status'),json_extract(n.result,'$.error'),s.step_id IS NOT NULL FROM numbered n JOIN projects p ON p.project_id=n.project_id AND p.deleted_at IS NULL LEFT JOIN steps s ON s.project_id=n.project_id AND s.step_id=n.step_id \
-         WHERE n.finished_at IS NULL OR julianday(n.finished_at)>=julianday(?2) ORDER BY n.began,n.run_id",
+        &format!("SELECT r.project_id,r.run_id,r.step_id,coalesce(r.unit,s.unit,''),{number},r.item_index,coalesce(r.started_at,r.created_at),r.finished_at,r.result_status,r.result_error,s.step_id IS NOT NULL FROM runs r INDEXED BY runs_day JOIN projects p ON p.project_id=r.project_id AND p.deleted_at IS NULL LEFT JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id WHERE (r.finished_at IS NULL OR r.finished_at>=?2) AND r.step_id IS NOT NULL AND (?1='' OR r.project_id=?1) ORDER BY coalesce(r.started_at,r.created_at),r.run_id", number=if brief { "1" } else { "(SELECT count(*) FROM runs o WHERE o.project_id=r.project_id AND o.step_id=r.step_id AND (o.created_at,o.run_id)<=(r.created_at,r.run_id))" }),
     )?;
     let mut rows = q.query((&only, &since))?;
     let mut runs = vec![];
@@ -310,7 +315,7 @@ pub fn load(
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut moving = BTreeMap::new();
-    for run in runs.iter_mut().filter(|r| r.outcome == Some(Shown::Running)) {
+    for run in runs.iter_mut().filter(|r| !brief && r.outcome == Some(Shown::Running)) {
         let (stopping, finishing, parked) = moving.entry(run.project).or_insert_with(|| {
             (
                 sluice_store::attempts::stopping(c, run.project).unwrap_or_default(),
@@ -330,7 +335,7 @@ pub fn load(
         }
     }
     let mut names = BTreeMap::new();
-    for run in &mut runs {
+    for run in runs.iter_mut().filter(|_| !brief) {
         let naming = names.entry(run.project).or_insert_with(|| {
             sluice_runtime::naming::for_project(c, &home, run.project).ok()
         });
@@ -348,7 +353,7 @@ pub fn load(
     // for a project that ran nothing in the day: when it last did
     let mut last_before = BTreeMap::new();
     let mut q = c.prepare_cached(
-        "SELECT project_id,max(coalesce(finished_at,started_at,created_at)) FROM runs WHERE step_id IS NOT NULL AND (?1='' OR project_id=?1) GROUP BY project_id",
+        "SELECT project_id,max(coalesce((SELECT max(finished_at) FROM runs r WHERE r.project_id=p.project_id AND r.step_id IS NOT NULL),''),coalesce((SELECT max(coalesce(started_at,created_at)) FROM runs r WHERE r.project_id=p.project_id AND r.step_id IS NOT NULL AND finished_at IS NULL),'')) FROM projects p WHERE deleted_at IS NULL AND (?1='' OR project_id=?1)",
     )?;
     let mut rows = q.query([&only])?;
     while let Some(r) = rows.next()? {
@@ -356,7 +361,7 @@ pub fn load(
             r.get::<_, String>(0)?.parse::<ProjectId>(),
             r.get::<_, Option<String>>(1)?,
         ) {
-            last_before.insert(id, at);
+            if !at.is_empty() { last_before.insert(id, at); }
         }
     }
     Ok(DayData {

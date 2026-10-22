@@ -1,4 +1,4 @@
-//! Datastar 0.4.1 patches. A version signal acknowledges all preceding HTML.
+//! Datastar 1.0 patches through the Rust SDK. A version signal acknowledges all preceding HTML.
 use crate::views::{DashboardState, TrustedHtml, Viewer, home};
 use axum::{
     extract::{Query, State},
@@ -34,6 +34,13 @@ pub struct PatchRegion {
     pub html: TrustedHtml,
 }
 impl PatchRegion {
+    /// A small set of root signals, compared and acknowledged in the same batch as HTML.
+    pub fn signals(name: &str, values: serde_json::Value) -> Self {
+        Self {
+            id: format!("@{name}"),
+            html: TrustedHtml::owned(values.to_string()),
+        }
+    }
     pub fn new(id: impl Into<String>, html: TrustedHtml) -> Self {
         Self {
             id: id.into(),
@@ -95,16 +102,17 @@ impl RenderedBatch {
 /// What the page's clock keeps, so the clock alone never changes a version: each tag that opens
 /// with one of these, and what of it is the clock's: the text of a ticking time, the `style` of
 /// a mark or span on a pulse strip (`unit_steps::bar`, `mark`), the `class` of a row's heard line.
-const CLOCK: [(&str, Clocked); 4] = [
-    ("<time data-since=", Clocked::Text),
-    ("<time data-ago=", Clocked::Text),
+const CLOCK: [(&str, Clocked); 5] = [
+    ("<time data-since=", Clocked::Text("</time>")),
+    ("<time data-ago=", Clocked::Text("</time>")),
+    ("<span data-count=", Clocked::Text("</span>")),
     ("<i data-a=", Clocked::Attr(" style=\"")),
     ("<span data-heard=", Clocked::Attr(" class=\"")),
 ];
 #[derive(Clone, Copy)]
 enum Clocked {
     /// Its text, to its `</time>`.
-    Text,
+    Text(&'static str),
     /// This attribute's value, in its tag.
     Attr(&'static str),
 }
@@ -121,9 +129,9 @@ fn without_clock(html: &str, out: &mut Vec<u8>) {
         };
         let (kept, after) = rest.split_at(at + tag + 1);
         match clocked {
-            Clocked::Text => {
+            Clocked::Text(end_tag) => {
                 out.extend_from_slice(kept.as_bytes());
-                rest = after.find("</time>").map_or(after, |end| &after[end..]);
+                rest = after.find(end_tag).map_or(after, |end| &after[end..]);
             }
             Clocked::Attr(name) => {
                 let tag = &kept[at..];
@@ -241,6 +249,16 @@ impl Comparison {
         let mut drawn = BTreeMap::new();
         let send = !first || self.client_version != batch.version;
         for region in &batch.regions {
+            if region.id.starts_with('@') {
+                let hash = skeleton_hash(region.html.as_str());
+                if self.drawn.get(&region.id) != Some(&hash) {
+                    events.push(StreamEvent::Signals(PatchSignals::new(
+                        region.html.as_str(),
+                    )));
+                }
+                drawn.insert(region.id.clone(), hash);
+                continue;
+            }
             if first {
                 record(&region.id, region.html.as_str(), &mut drawn);
                 if send {

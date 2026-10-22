@@ -102,17 +102,13 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
             sluice_store::messages::mark_read(tx, read)
         }))
         .unwrap();
-        // the inbox now keeps it under "Read today", drawn from the stored marks: a reload
-        // (twice) still shows it there, and the other note still unread
+        // Reloading the inbox keeps the remaining note and links to the full read history;
+        // it never ships the marked note in a hidden disclosure.
         for _ in 0..2 {
             browser.navigate(&format!("{base}/inbox")).unwrap();
-            browser
-                .wait("document.readyState === 'complete' && !!document.querySelector('details.read-today')")
-                .unwrap();
-            let state = browser
-                .eval("[document.querySelector('details.read-today').textContent.includes('The lane landed on main.'), document.querySelector('section.notes').textContent.includes('The lane landed'), document.querySelector('section.notes').textContent.includes('A second note'), document.querySelector('details.read-today .n').textContent]")
-                .unwrap();
-            assert_eq!(state, serde_json::json!([true, false, true, "1"]), "{state}");
+            browser.wait("document.readyState === 'complete' && !!document.querySelector('section.notes')").unwrap();
+            let state = browser.eval("[document.querySelector('section.notes').textContent.includes('The lane landed'), document.querySelector('section.notes').textContent.includes('A second note'), !!document.querySelector('a[href=\"/history\"]')]").unwrap();
+            assert_eq!(state, serde_json::json!([false, true, true]), "{state}");
         }
         // opening a thread does not mark it read: it offers to
         browser

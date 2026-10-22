@@ -1095,10 +1095,7 @@ impl<'a> Plan<'a> {
         first.push(if self.done.is_empty() {
             done
         } else {
-            format!(
-                "<a href=\"{}?show=done#done\">{done}</a>",
-                esc(&self.view.href())
-            )
+            format!("<a href=\"{}/history\">{done}</a>", esc(&self.view.href()))
         });
         first.join(" · ")
     }
@@ -1287,25 +1284,26 @@ impl<'a> Plan<'a> {
             out.push_str(&format!("<p class=\"plan-history meta\">{today} finished today · <a href=\"{}/history\">History →</a></p>", esc(&self.view.href())));
         }
         out.push_str("</div>");
-        let index = self.view.show == "done"
-            || !self.view.q.is_empty()
-            || !self.view.recipe.is_empty()
-            || !self.view.root.is_empty();
-        out.push_str(&region(
-            "plan-done",
-            &if index && !self.done.is_empty() {
-                self.done_html()
-            } else {
-                "<div id=\"plan-done\" hidden></div>".to_owned()
-            },
-        ));
+        if !self.done.is_empty()
+            && (!self.view.q.is_empty()
+                || !self.view.recipe.is_empty()
+                || !self.view.root.is_empty()
+                || self.view.show == "done")
+        {
+            out.push_str(&region("plan-done", &self.done_html()));
+        } else {
+            out.push_str(&region(
+                "plan-done",
+                "<section id=\"plan-done\" hidden></section>",
+            ));
+        }
         TrustedHtml::owned(out)
     }
 
     // ---- At work -------------------------------------------------------------------------------
 
     /// At work: its name and counts, recipe groups, plain rows and long runs.
-    fn roster_html(&self) -> String {
+    fn roster_count(&self) -> String {
         let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
         // counted as the summary counts them: a blocked or queued unit waits, it is not at work
         let waiting: usize = self
@@ -1314,15 +1312,22 @@ impl<'a> Plan<'a> {
             .flat_map(|g| &g.rows)
             .filter(|r| r.waiting)
             .count();
-        let counts = match (rows - waiting, waiting) {
+        match (rows - waiting, waiting) {
             (0, 0) => String::new(),
             (0, w) => format!("{w} waiting"),
             (n, 0) => ui::count(n, "unit", "units"),
             (n, w) => format!("{} · {w} waiting", ui::count(n, "unit", "units")),
-        };
+        }
+    }
+    fn roster_html(&self) -> String {
+        let rows: usize = self.groups.iter().map(|g| g.rows.len()).sum();
+        let counts = self.roster_count();
         let counts = region(
             "ro-counts",
-            &format!("<span id=\"ro-counts\" class=\"n\">{}</span>", esc(&counts)),
+            &format!(
+                "<span data-count=\"rosterCount\" id=\"ro-counts\" class=\"n\" data-text__root=\"$rosterCount\">{}</span>",
+                esc(&counts)
+            ),
         );
         // an engine's chip where any row runs on one: the column is the agents'
         let engined = self
@@ -1375,7 +1380,10 @@ impl<'a> Plan<'a> {
                 // group with nothing remarkable folds whole to its own line
                 let (marked, healthy): (Vec<&Row<'_>>, Vec<&Row<'_>>) =
                     group.rows.iter().partition(|r| self.remarkable(r));
-                let fold = rows > FOLD_ROSTER && healthy.len() > FOLD_GROUP;
+                let fold = rows > FOLD_ROSTER
+                    && healthy.len() > FOLD_GROUP
+                    && self.view.recipe.is_empty()
+                    && self.view.q.is_empty();
                 let whole = fold && marked.is_empty();
                 let heard = |rows: &[&Row<'_>]| {
                     rows.iter()
@@ -1393,6 +1401,8 @@ impl<'a> Plan<'a> {
                     "ro-g-{:x}",
                     crate::streams::skeleton_hash(&format!("{}:{}", group.recipe, group.name))
                 );
+                let expanded = self.view.folds.get(&group_id).copied().unwrap_or(!whole);
+                let _ = write!(out, "<!--r:{group_id}-->");
                 let counts = region(
                     &format!("{group_id}-counts"),
                     &format!(
@@ -1418,10 +1428,15 @@ impl<'a> Plan<'a> {
                 };
                 let _ = write!(
                     out,
-                    "<details class=\"ro-g\" id=\"{group_id}\" data-plan-fold=\"{group_id}\" data-preserve-attr=\"open\"{}><summary class=\"ro-group\">{}<b>{name}</b>{counts}</summary>",
-                    if whole { "" } else { " open" },
+                    "<details class=\"ro-g\" id=\"{group_id}\" data-plan-fold=\"{group_id}\" data-roster-fold data-fold-loaded=\"{}\" data-preserve-attr=\"open\"{}><summary class=\"ro-group\">{}<b>{name}</b>{counts}</summary>",
+                    expanded,
+                    if !expanded { "" } else { " open" },
                     icon(Icon::ChevronRight, 16, "chev"),
                 );
+                if !expanded {
+                    let _ = write!(out, "</details><!--/r:{group_id}-->");
+                    continue;
+                }
                 // a recipe whose view does not check: said once
                 if let Some(error) = group
                     .rows
@@ -1435,7 +1450,23 @@ impl<'a> Plan<'a> {
                     draw(&mut out, &marked);
                     let _ = write!(
                         out,
-                        "<details class=\"qf ro-fold\" id=\"{group_id}-quiet\" data-plan-fold=\"{group_id}-quiet\" data-preserve-attr=\"open\"><summary>{}</summary>",
+                        "<details class=\"qf ro-fold\" id=\"{group_id}-quiet\" data-plan-fold=\"{group_id}-quiet\" data-roster-fold data-fold-loaded=\"{}\" data-preserve-attr=\"open\"{}><summary>{}</summary>",
+                        self.view
+                            .folds
+                            .get(&format!("{group_id}-quiet"))
+                            .copied()
+                            .unwrap_or(false),
+                        if self
+                            .view
+                            .folds
+                            .get(&format!("{group_id}-quiet"))
+                            .copied()
+                            .unwrap_or(false)
+                        {
+                            " open"
+                        } else {
+                            ""
+                        },
                         region(
                             &format!("{group_id}-quiet-counts"),
                             &format!(
@@ -1445,12 +1476,20 @@ impl<'a> Plan<'a> {
                             )
                         )
                     );
-                    draw(&mut out, &healthy);
+                    if self
+                        .view
+                        .folds
+                        .get(&format!("{group_id}-quiet"))
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        draw(&mut out, &healthy);
+                    }
                     out.push_str("</details>");
                 } else {
                     draw(&mut out, &group.rows.iter().collect::<Vec<_>>());
                 }
-                out.push_str("</details>");
+                let _ = write!(out, "</details><!--/r:{group_id}-->");
             }
             out.push_str("</div>");
         }
@@ -1669,63 +1708,12 @@ impl<'a> Plan<'a> {
 
     // ---- the done index ------------------------------------------------------------------------
 
-    /// Done, when asked for (Show: done, a find, a recipe's units): a dense index of every done
-    /// unit, newest first.
+    /// Finished work lives in History; legacy filters retain a link and count.
     fn done_html(&self) -> String {
-        let steps: usize = self.done.iter().map(|u| u.steps.len()).sum();
-        let last = self.done.first().map(|u| u.finished()).unwrap_or("");
-        let mut line = format!(
-            "{} · {}",
-            ui::count(self.done.len(), "unit", "units"),
-            ui::count(steps, "step", "steps")
-        );
-        if !last.is_empty() {
-            line.push_str(&format!(" · the last finished {}", ui::ago_text(last)));
-        }
-        let mut items = String::new();
-        for unit in &self.done {
-            let took = took(unit);
-            // a cancel the owner dismissed leaves its unit done, still said
-            let cancels: Vec<String> = unit
-                .steps
-                .iter()
-                .filter(|s| s.cancelled())
-                .map(|s| unit.step_name(s))
-                .collect();
-            let dismissed = unit.steps.iter().any(|s| s.cancelled() && s.dismissed);
-            let _ = write!(
-                items,
-                "<li data-said=\"{said}\"><a href=\"{h}\"><span class=\"pl-at\">{at}</span>{g}<span class=\"pl-dt\">{t}</span><span class=\"pl-dk\">{k}</span></a></li>",
-                said = esc(&said_states(unit)),
-                h = esc(&unit_href(self.view, unit)),
-                at = if unit.finished().is_empty() {
-                    String::new()
-                } else {
-                    ui::clock(unit.finished()).0
-                },
-                g = ui::glyph(if cancels.is_empty() {
-                    unit.shown()
-                } else {
-                    Shown::Cancelled
-                }),
-                t = esc(title(unit)),
-                k = if !cancels.is_empty() {
-                    let cancels: Vec<&str> = cancels.iter().map(String::as_str).collect();
-                    format!(
-                        "{} cancelled{}",
-                        esc(&join(&cancels)),
-                        if dismissed { ", settled as done" } else { "" }
-                    )
-                } else if took > 0.0 {
-                    format!("took {}", esc(&ui::duration_text(took)))
-                } else {
-                    esc(unit.shown().word())
-                },
-            );
-        }
         format!(
-            "<section id=\"plan-done\" class=\"pb-sec\" aria-labelledby=\"done\">{}<ol class=\"pl-idx\">{items}</ol></section>",
-            ui::section_head("done", "Done", &line)
+            "<section id=\"plan-done\" class=\"meta\"><a href=\"{}/history\">{} finished units · History →</a></section>",
+            esc(&self.view.href()),
+            self.done.len()
         )
     }
 }
@@ -1984,21 +1972,20 @@ pub fn roster_row(row: &RowParts<'_>) -> String {
     let (on_open, drill) = match &row.drill {
         Some(d) => (
             format!(
-                " data-steps=\"{steps}\" data-on:toggle=\"el.open &amp;&amp; @get('{src}')\"",
+                " data-steps=\"{steps}\" data-on:toggle=\"el.open &amp;&amp; @get('{src}?at=' + el.querySelector('[data-drill-stamp]').dataset.drillStamp)\"",
                 steps = esc(&d.steps),
                 src = esc(&d.src)
             ),
             format!(
-                "<div id=\"drill-{id}\" class=\"ro-drill\" data-ignore-morph></div><i hidden data-init=\"el.parentElement.open &amp;&amp; @get('{src}?at={stamp:x}')\"></i>",
+                "<!--r:stamp-{id}--><i id=\"stamp-{id}\" hidden data-drill-stamp=\"{stamp:x}\"></i><!--/r:stamp-{id}--><div id=\"drill-{id}\" class=\"ro-drill\" data-ignore-morph></div>",
                 id = esc(row.id),
-                src = esc(&d.src),
-                stamp = d.stamp
+                stamp = d.stamp,
             ),
         ),
         None => (String::new(), "<div class=\"ro-drill\"></div>".to_owned()),
     };
     format!(
-        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open data-flash\"{on_open}><summary class=\"ro-r\"><span class=\"engine\"{runs}>{engine}</span><span class=\"ro-main\"><span class=\"ro-t\" title=\"{plain}\">{title}{own}</span><span class=\"track\">{track}</span><span class=\"ro-said\">{said}</span></span>{pulse}<span class=\"ro-fold-i\" aria-hidden=\"true\">{chev}</span></summary>{drill}</details>",
+        "<details id=\"u-{id}\" class=\"ro-u{wait}\" data-unit=\"{id}\"{states} data-preserve-attr=\"open data-flash\"{on_open}><summary class=\"ro-r\"><span class=\"engine\"{runs}>{engine}</span><span class=\"ro-main\"><span class=\"ro-t\" title=\"{plain}\">{title}{own}</span><!--r:track-{id}--><span id=\"track-{id}\" class=\"track\">{track}</span><!--/r:track-{id}--><!--r:said-{id}--><span id=\"said-{id}\" class=\"ro-said\">{said}</span><!--/r:said-{id}--></span><!--r:pulse-{id}--><span id=\"pulse-{id}\" class=\"ro-pulse-region\">{pulse}</span><!--/r:pulse-{id}--><span class=\"ro-fold-i\" aria-hidden=\"true\">{chev}</span></summary>{drill}</details>",
         id = esc(row.id),
         wait = if row.waiting { " is-wait" } else { "" },
         states = if row.said_states.is_empty() {
@@ -2170,14 +2157,6 @@ pub fn view_links(href: &str, chosen: Option<&str>) -> String {
     .collect();
     format!("<div class=\"view-options\">{links}</div>")
 }
-/// "a", "a and b", "a, b and c".
-fn join(items: &[&str]) -> String {
-    match items {
-        [] => String::new(),
-        [one] => (*one).to_owned(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
 /// `html` marked as a region a stream patches alone (`streams::PatchRegion`): its element's id.
 fn region(id: &str, html: &str) -> String {
     format!("<!--r:{id}-->{html}<!--/r:{id}-->")
@@ -2240,6 +2219,8 @@ pub fn draw(
     // The find reopens the stream as it is typed.
     let mut signals = serde_json::Map::new();
     signals.insert("q".into(), view.q.clone().into());
+    signals.insert("rosterCount".into(), plan.roster_count().into());
+    signals.insert("folds".into(), serde_json::json!(view.folds));
     let frame = Frame {
         head: plan.band(),
         find: plan.find(),
@@ -2248,6 +2229,10 @@ pub fn draw(
     let mut regions = vec![
         PatchRegion::new("project-board", board_region(&body)),
         PatchRegion::new("plan-band", frame.head.clone()),
+        PatchRegion::signals(
+            "roster-count",
+            serde_json::json!({"rosterCount":plan.roster_count()}),
+        ),
     ];
     regions.extend(super::nav_regions(&nav, &view.href()));
     let batch = RenderedBatch::new(regions);

@@ -475,10 +475,8 @@ fn facts(
         entry.running_since = Some(at);
     }
     let changes = [
-        "SELECT step_id,min((julianday('now')-julianday(at))*86400),at FROM records
-         WHERE project_id=?1 AND kind='step.status' AND step_id IS NOT NULL GROUP BY step_id",
-        "SELECT step_id,min((julianday('now')-julianday(coalesce(finished_at,started_at,created_at)))*86400),coalesce(finished_at,started_at,created_at)
-         FROM runs WHERE project_id=?1 AND step_id IS NOT NULL GROUP BY step_id",
+        "SELECT s.step_id,(julianday('now')-julianday((SELECT max(at) FROM records r WHERE r.project_id=s.project_id AND r.step_id=s.step_id AND r.kind='step.status')))*86400,(SELECT max(at) FROM records r WHERE r.project_id=s.project_id AND r.step_id=s.step_id AND r.kind='step.status') FROM steps s WHERE s.project_id=?1",
+        "SELECT s.step_id,(julianday('now')-julianday((SELECT max(coalesce(finished_at,started_at,created_at)) FROM runs r WHERE r.project_id=s.project_id AND r.step_id=s.step_id)))*86400,(SELECT max(coalesce(finished_at,started_at,created_at)) FROM runs r WHERE r.project_id=s.project_id AND r.step_id=s.step_id) FROM steps s WHERE s.project_id=?1",
     ];
     for query in changes {
         for (step, secs, at) in ago(sql, query)? {
@@ -499,7 +497,7 @@ fn last_messages(
 ) -> sluice_store::Result<indexmap::IndexMap<StepId, LastMessage>> {
     let mut q = sql.prepare(
         "SELECT thread,id,body,needs_reply FROM messages WHERE id IN (
-           SELECT max(id) FROM messages WHERE project_id=?1 AND thread LIKE 'step-%' GROUP BY thread)",
+           SELECT (SELECT max(id) FROM messages m WHERE m.project_id=s.project_id AND m.thread='step-'||s.step_id) FROM steps s WHERE s.project_id=?1)",
     )?;
     let rows = q
         .query_map([id.to_string()], |r| {

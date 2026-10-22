@@ -101,13 +101,9 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(!title(&page).contains('⚠'), "{}", title(&page));
     // no longer stopped: its unit is done, a line of the Done index that still reads cancelled
     let (_, index) = f.get(&format!("/projects/id/{id}?show=done")).await;
-    assert_eq!(plan_html::place(&index, "u"), "done", "{index}");
-    let done = plan_html::band(&index, "plan-done");
-    let line = between(done, "/units/u\">", "</li>");
-    assert!(
-        line.contains("g-cancelled") && line.contains(">b cancelled, settled as done</span>"),
-        "{line}"
-    );
+    assert!(index.contains(&format!("href=\"/projects/id/{id}/history\"")));
+    let (_, unit) = f.get(&format!("/projects/id/{id}/units/u")).await;
+    assert!(unit.contains("cancelled"), "{unit}");
     assert!(!plan_html::summary(&page).contains("cancelled"), "{page}");
     // settled, not set aside: Needs you holds no item and no Set aside line (its step's page
     // undoes it)

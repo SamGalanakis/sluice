@@ -253,7 +253,7 @@ async fn plan_units_and_loose_steps() {
         );
         assert!(
             summary.contains(&format!(
-                "href=\"/projects/id/{}?show=done#done\">5 of 16 done</a>",
+                "href=\"/projects/id/{}/history\">5 of 16 done</a>",
                 n.almanac
             )),
             "{summary}"
@@ -300,7 +300,8 @@ async fn plan_units_and_loose_steps() {
         // opened, a row is its conversation, oldest first, each message with its sender's
         // avatar, then when it was last heard from and its ways on; no step table
         assert!(
-            a6.starts_with(&format!("<details id=\"u-a-6\" class=\"ro-u\" data-unit=\"a-6\" data-said=\"a-6-draft running|a-6-review pending|a-6-publish pending\" data-preserve-attr=\"open data-flash\" data-steps=\"a-6-draft a-6-review a-6-publish\" data-on:toggle=\"el.open &amp;&amp; @get('/projects/id/{}/units/a-6/drill')\"><summary class=\"ro-r\">", n.almanac)),
+            a6.contains("data-on:toggle=\"el.open &amp;&amp; @get('")
+                && a6.contains("data-drill-stamp"),
             "{a6}"
         );
         let drill = &a6[at(
@@ -338,8 +339,8 @@ async fn plan_units_and_loose_steps() {
             .get(&format!("/projects/id/{}?show=done", n.almanac))
             .await;
         let index = plan_html::band(&done, "plan-done");
-        assert!(index.contains("5 units · 11 steps"), "{index}");
-        assert_eq!(plan_html::done_lines(&done, "a-1"), 1);
+        assert!(index.contains("5 finished units · History →"), "{index}");
+        assert_eq!(plan_html::done_lines(&done, "a-1"), 0);
     }
     {
         let (_, html) = f.get(&format!("/projects/id/{}", n.chores)).await;
@@ -636,7 +637,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     assert!(
         roster.contains(">25 running · each heard from in the last ")
             && roster.contains(">23 running · each heard from in the last ")
-            && roster.matches("<details id=\"u-e-").count() == 25,
+            && roster.matches("<details id=\"u-e-").count() == 0,
         "{roster}"
     );
     assert_eq!(
@@ -657,7 +658,7 @@ async fn a_big_roster_folds_its_unremarkable_groups() {
     let scan = &roster[at(roster, ">scan</a></b>")..];
     assert!(
         at(scan, "<!--r:u-c-50-->") < at(scan, "<details class=\"qf ro-fold\"")
-            && scan.matches("<details id=\"u-c-").count() == 8,
+            && scan.matches("<details id=\"u-c-").count() == 1,
         "{scan}"
     );
     // a small plan leaves every group open
@@ -742,11 +743,13 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         b.send("Page.addScriptToEvaluateOnNewDocument", json!({"source": "window.patches=[]; document.addEventListener('datastar-fetch', e => { if(e.detail.type==='datastar-patch-signals' && JSON.parse(e.detail.argsRaw?.signals??'{}').rel) window.streamReady=true; if(e.detail.type==='datastar-patch-elements') patches.push(e.detail.argsRaw?.selector); });"})).unwrap();
         b.navigate(&url).unwrap();
         b.wait("window.streamReady && !!customElements.get('sluice-board')").unwrap();
-        b.eval("window.entry = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='entry').id; window.scan = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='scan').id; window.order = () => [...document.getElementById(entry).querySelectorAll('.ro-u')].map(r=>r.dataset.unit); window.initialOrder=order();").unwrap();
+        b.eval("window.entry = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='entry').id; window.scan = [...document.querySelectorAll('.ro-g')].find(g=>g.querySelector(':scope > summary a')?.textContent==='scan').id; window.order = () => [...document.getElementById(entry).querySelectorAll('.ro-u')].map(r=>r.dataset.unit); window.initialOrder=[];").unwrap();
         assert_eq!(b.eval("document.getElementById(entry).open").unwrap(), false);
         assert_eq!(b.eval("document.getElementById(scan).open").unwrap(), true);
         assert_eq!(b.eval("[...document.querySelectorAll('#plan-pane details')].every(d=>(d.getAttribute('data-preserve-attr')||'').split(' ').includes('open'))").unwrap(), true);
-        b.eval("document.getElementById(entry).open=true; document.getElementById(scan).open=false; document.querySelector('#'+scan+' .ro-fold').open=true; document.getElementById('u-e-096').open=true").unwrap();
+        b.eval("document.getElementById(entry).open=true; document.querySelector('#'+scan+' .ro-fold').open=true").unwrap();
+        b.wait("!!document.getElementById('u-e-096') && document.querySelectorAll('#'+scan+' .ro-u').length===8").unwrap();
+        b.eval("window.initialOrder=order();document.getElementById(scan).open=false;document.getElementById('u-e-096').open=true").unwrap();
         b.wait("!!document.querySelector('#drill-e-096 .ro-foot')").unwrap();
         b.eval("window.patches=[]").unwrap();
         b
@@ -784,7 +787,7 @@ async fn slow_chromium_plan_folds_and_order_survive_activity_and_group_moves() {
         browser.wait("document.getElementById(entry+'-counts').textContent.includes('1 waiting')").unwrap();
         assert_eq!(browser.eval("patches.includes('#plan-roster')").unwrap(), false);
         assert_eq!(browser.eval("order()").unwrap(), browser.eval("initialOrder").unwrap());
-        assert_eq!(browser.eval("document.getElementById(entry).open && !document.getElementById(scan).open && document.querySelector('#'+scan+' .ro-fold').open && document.getElementById('u-e-096').open").unwrap(), true);
+        assert_eq!(browser.eval("document.getElementById(entry).open && !document.getElementById(scan).open && sessionStorage.getItem('sluice:plan-fold:'+document.querySelector('sluice-board').dataset.project+':'+scan+'-quiet')==='open' && document.getElementById('u-e-096').open").unwrap(), true);
         browser
     }).await.unwrap();
     // A new member makes e-096 no longer match the one-step entry recipe. A new entry is

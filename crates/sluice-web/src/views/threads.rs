@@ -414,8 +414,7 @@ pub struct InboxView {
     pub view: MessageView,
     pub questions: Vec<MessageItem>,
     pub threads: Vec<ThreadView>,
-    /// On the inbox, the notes the owner marked read in the last day, by thread: "Read today".
-    pub read: Vec<ThreadView>,
+    pub older_notes: Option<i64>,
 }
 impl InboxView {
     /// Its `h1`: a project's inbox is its "Messages" (the nav's word for the section), so it
@@ -504,10 +503,6 @@ impl InboxView {
     pub fn unread_notes(&self) -> usize {
         self.threads.iter().map(|t| t.messages.len()).sum()
     }
-    /// The notes read in the last day, across their threads.
-    pub fn read_notes(&self) -> usize {
-        self.read.iter().map(|t| t.messages.len()).sum()
-    }
     /// The open questions someone waits on that are put to the owner: what the nav's Inbox
     /// counts.
     pub fn for_you(&self) -> Vec<&MessageItem> {
@@ -585,7 +580,7 @@ impl InboxView {
                 self.nav.version(),
                 self.questions,
                 self.threads,
-                self.read
+                self.older_notes
             )
             .as_bytes(),
         )
@@ -1541,13 +1536,41 @@ fn threads_of(groups: BTreeMap<(String, String), ThreadView>) -> Vec<ThreadView>
     threads.sort_by_key(|t| std::cmp::Reverse(t.through));
     threads
 }
-/// The owner answered a question put to it in the last ten minutes, in this project.
-fn just_answered(
+/// Home draws only questions someone is waiting for, as counted by its navigation snapshot.
+pub fn home_questions(
+    sql: &rusqlite::Connection,
+    nav: &DashboardSnapshot,
+) -> sluice_store::Result<Vec<MessageItem>> {
+    let mut out = Vec::new();
+    for p in &nav.projects {
+        let answered = recently_answered(sql, p.id)?;
+        if p.asks.is_empty() && answered.is_empty() {
+            continue;
+        }
+        let steps = step_names(sql, p.id)?;
+        for ask in &p.asks {
+            let message = messages::message(sql, p.id, sluice_model::ids::MessageId(ask.message))?;
+            out.push(item(sql, p.id, &p.name, &steps, message)?);
+        }
+        for (id, at) in answered {
+            let message = messages::message(sql, p.id, sluice_model::ids::MessageId(id))?;
+            let mut answer = item(sql, p.id, &p.name, &steps, message)?;
+            answer.answered_at = at;
+            out.push(answer);
+        }
+    }
+    out.sort_by_key(MessageItem::id);
+    Ok(out)
+}
+fn recently_answered(
     sql: &rusqlite::Connection,
     project: ProjectId,
-) -> Result<bool, sluice_store::StoreError> {
-    Ok(sql.prepare_cached("SELECT EXISTS (SELECT 1 FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND (q.\"to\"='owner' OR q.closed_at IS NOT NULL) AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0)")?
-        .query_row([project.to_string()], |r| r.get(0))?)
+) -> sluice_store::Result<Vec<(i64, String)>> {
+    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages a JOIN messages q ON q.project_id=a.project_id AND q.resolved_by=a.id AND q.needs_reply=1 WHERE a.project_id=?1 AND a.\"from\"='owner' AND a.at>=strftime('%Y-%m-%dT%H:%M:%f','now','-10 minutes') AND (q.\"to\"='owner' OR q.closed_at IS NOT NULL) ORDER BY q.id")?;
+    Ok(
+        q.query_map([project.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?,
+    )
 }
 pub async fn load(
     reads: &ReadPool,
@@ -1555,42 +1578,49 @@ pub async fn load(
     view: MessageView,
     thread: Option<String>,
 ) -> Result<InboxView, PublicError> {
+    load_page(reads, project, view, thread, None).await
+}
+/// Notes use a keyset page across projects; questions stay visible on every page.
+pub async fn load_page(
+    reads: &ReadPool,
+    project: Option<ProjectId>,
+    view: MessageView,
+    thread: Option<String>,
+    before: Option<i64>,
+) -> Result<InboxView, PublicError> {
     reads
         .clock_snapshot(move |sql| {
             let nav = load_snapshot(sql, FunctionCatalog::default())?;
             if let Some(id) = project {
                 messages::resolve_project(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
             }
-            // "today": the last day, so a note read last night is still there in the morning
-            let since = super::rfc3339(
-                crate::clock::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0)
-                    .saturating_sub(86_400),
-            );
+            let mut notes = BTreeMap::<ProjectId, Vec<sluice_model::ids::MessageId>>::new();
+            let mut older_notes = None;
+            if matches!(view, MessageView::Inbox) {
+                let mut q = sql.prepare_cached("SELECT m.project_id,m.id FROM messages m JOIN projects p USING(project_id) WHERE p.deleted_at IS NULL AND (?1 IS NULL OR m.project_id=?1) AND m.\"to\"='owner' AND m.needs_reply=0 AND m.id<?2 AND m.id>coalesce((SELECT cursor FROM readers r WHERE r.project_id=m.project_id AND r.identity='owner' AND r.stream='owner' AND r.thread=m.thread),0) ORDER BY m.id DESC LIMIT 51")?;
+                let rows = q.query_map((project.map(|p| p.to_string()), before.unwrap_or(i64::MAX)), |r| Ok((r.get::<_,String>(0)?, r.get::<_,i64>(1)?)))?.collect::<Result<Vec<_>,_>>()?;
+                if rows.len()>50 { older_notes = rows.get(49).map(|r|r.1); }
+                for (p,id) in rows.into_iter().take(50) {
+                    if let Ok(p) = p.parse() { notes.entry(p).or_default().push(sluice_model::ids::MessageId(id)); }
+                }
+            }
             let mut questions = vec![];
             let mut groups = BTreeMap::new();
-            let mut read = BTreeMap::new();
             for p in nav
                 .projects
                 .iter()
                 .filter(|p| project.is_none_or(|id| id == p.id))
             {
-                let selected =
-                    messages::messages(sql, p.id, view.clone(), thread.as_deref(), None, "owner")?;
-                let read_today = if matches!(view, MessageView::Inbox) {
-                    messages::read_notes(sql, p.id, "owner", &since)?
+                let selected = if matches!(view, MessageView::Inbox) {
+                    let mut selected = messages::messages(sql, p.id, MessageView::Questions, thread.as_deref(), None, "owner")?;
+                    selected.retain(|m| m.to.as_deref() == Some("owner"));
+                    for id in notes.remove(&p.id).unwrap_or_default() { selected.push(messages::message(sql,p.id,id)?); }
+                    selected
                 } else {
-                    vec![]
+                    messages::messages(sql, p.id, view.clone(), thread.as_deref(), None, "owner")?
                 };
-                if selected.is_empty()
-                    && read_today.is_empty()
-                    && !(matches!(view, MessageView::Inbox | MessageView::Questions)
-                        && just_answered(sql, p.id)?)
-                {
-                    continue;
-                }
+                let answered = if matches!(view, MessageView::Inbox | MessageView::Questions) { recently_answered(sql,p.id)? } else { vec![] };
+                if selected.is_empty() && answered.is_empty() { continue; }
                 let steps = step_names(sql, p.id)?;
                 for message in selected {
                     let item = item(sql, p.id, &p.name, &steps, message)?;
@@ -1602,19 +1632,7 @@ pub async fn load(
                         group(sql, &mut groups, p, item)?;
                     }
                 }
-                for message in read_today {
-                    let item = item(sql, p.id, &p.name, &steps, message)?;
-                    group(sql, &mut read, p, item)?;
-                }
-                // the questions to the owner the owner answered or closed in the last ten
-                // minutes: kept in their place, each one line that says so
                 if matches!(view, MessageView::Inbox | MessageView::Questions) {
-                    let mut q = sql.prepare_cached("SELECT q.id,a.at FROM messages q JOIN messages a ON a.project_id=q.project_id AND a.id=q.resolved_by WHERE q.project_id=?1 AND (q.\"to\"='owner' OR q.closed_at IS NOT NULL) AND q.needs_reply=1 AND a.\"from\"='owner' AND julianday(a.at)>=julianday('now')-10.0/1440.0 ORDER BY q.id")?;
-                    let answered = q
-                        .query_map([p.id.to_string()], |r| {
-                            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
-                        })?
-                        .collect::<Result<Vec<_>, _>>()?;
                     for (id, at) in answered {
                         let message =
                             messages::message(sql, p.id, sluice_model::ids::MessageId(id))?;
@@ -1634,13 +1652,9 @@ pub async fn load(
                 groups.insert((id.to_string(), name.to_owned()), thread_view(sql, p, name)?);
             }
             let mut threads = threads_of(groups);
-            let mut read = threads_of(read);
             match view {
                 MessageView::Thread => converse(sql, &mut threads, true)?,
-                MessageView::Inbox => {
-                    converse(sql, &mut threads, false)?;
-                    converse(sql, &mut read, false)?;
-                }
+                MessageView::Inbox => {}
                 MessageView::Questions | MessageView::History => {}
             }
             Ok(InboxView {
@@ -1649,7 +1663,7 @@ pub async fn load(
                 view,
                 questions,
                 threads,
-                read,
+                older_notes,
             })
         })
         .await

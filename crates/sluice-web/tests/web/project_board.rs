@@ -469,7 +469,8 @@ async fn filtered_units_progress_done_and_paused() {
         // the failed unit is stopped; the done one (skipped, it never ran) a line of the index
         assert_eq!(units(&escaped), ["build"], "{escaped}");
         let (_, index) = f.get(&format!("/projects/id/{escaped_id}?show=done")).await;
-        assert_eq!(units(&index), ["finished"], "{index}");
+        assert!(units(&index).is_empty(), "{index}");
+        assert!(index.contains("1 finished units · History →"));
         assert!(escaped.contains("<li id=\"n-stop-start\""), "{escaped}");
         assert!(!escaped.contains("<script>failure"));
         assert!(!escaped.contains("Fixture <script>"));
@@ -707,34 +708,10 @@ async fn filtered_units_progress_done_and_paused() {
         // Show: Done, the index: every one, newest first
         let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
         let done = plan_html::band(&html, "plan-done");
-        assert!(done.contains("75 units · 75 steps"), "{done}");
-        assert_eq!(done.matches("<span class=\"pl-at\">").count(), 75, "{done}");
-        for i in 0..75 {
-            assert_eq!(
-                plan_html::done_lines(&html, &format!("u{i:02}")),
-                1,
-                "u{i:02}"
-            );
-        }
-        let at = |u: &str| {
-            ["units", "steps"]
-                .iter()
-                .find_map(|kind| done.find(&format!("/{kind}/{u}\"><span class=\"pl-at\">")))
-                .unwrap()
-        };
-        assert!(at("u74") < at("u73") && at("u73") < at("u00"), "{done}");
-        // a line says when it finished (the reader's clock), its title and how long it took; its
-        // id is its link's
-        let line = plan_html::between(
-            done,
-            "<time data-clock datetime=\"2026-10-06T12:14:00Z\"",
-            "</li>",
-        );
-        assert!(
-            line.contains("<span class=\"pl-dt\">Ship the parser fix</span><span class=\"pl-dk\">took 2h 14m</span>"),
-            "{line}"
-        );
-        assert!(!line.contains("pl-did"), "{line}");
+        assert!(done.contains("75 finished units · History →"), "{done}");
+        assert!(!done.contains("pl-idx"), "{done}");
+        let (_, history) = f.get(&format!("/projects/id/{id}/history")).await;
+        assert!(history.contains("Ship the parser fix"), "{history}");
     }
     {
         let held = f
@@ -780,7 +757,7 @@ async fn filtered_units_progress_done_and_paused() {
             .unwrap_or_else(|| panic!("no card for held: {home}"));
         assert!(
             card.contains("<p class=\"pm-size\"><span class=\"g g-paused\" role=\"img\" aria-label=\"paused\">")
-                && card.contains(&format!("<p class=\"pm-summary\">0 at work · 1 waiting · <a href=\"/projects/id/{held}?show=done#done\">1 of 3 done</a></p>")),
+                && card.contains(&format!("<p class=\"pm-summary\">0 at work · 1 waiting · <a href=\"/projects/id/{held}/history\">1 of 3 done</a></p>")),
             "{card}"
         );
         let (_, step) = f.get(&format!("/projects/id/{held}/steps/hold")).await;

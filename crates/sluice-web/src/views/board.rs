@@ -546,6 +546,8 @@ pub struct ProjectView {
     /// The plan's find (`q`): the words a unit's id or title, or one of its steps' id, title or
     /// doc, must all contain.
     pub q: String,
+    #[serde(skip)]
+    pub folds: BTreeMap<String, bool>,
     /// With a find, how many units it matched.
     pub matched: usize,
     /// Chain focus (`?root=<step>&up=1&down=1&depth=N`): the step whose ancestors (`up`) and
@@ -675,6 +677,7 @@ impl ProjectView {
             query: String::new(),
             show: "all".into(),
             q: String::new(),
+            folds: BTreeMap::new(),
             matched: 0,
             root: String::new(),
             up: false,
@@ -1183,13 +1186,7 @@ struct CompiledPlan {
     rev: Revision,
     signatures: String,
     plan: std::sync::Arc<Plan>,
-    created: Option<std::sync::Arc<UnitBirths>>,
-}
-#[derive(Clone, Default)]
-struct UnitBirths {
-    rev: u64,
-    steps: BTreeMap<String, String>,
-    units: std::sync::Arc<BTreeMap<String, u64>>,
+
 }
 impl PlanCache {
     /// The project's plan at its current revision, compiled against `provider` (whose version is
@@ -1216,76 +1213,6 @@ impl PlanCache {
         })?;
         Ok((rev, plan))
     }
-    /// Unit birth revisions come from the durable edit history, never run or message times.
-    /// Replay only when the plan revision changes, alongside the compiled plan cache.
-    fn created(
-        &self,
-        c: &Connection,
-        project: ProjectId,
-    ) -> sluice_store::Result<std::sync::Arc<BTreeMap<String, u64>>> {
-        let rev = sluice_store::plans::plan_revision(c, project)?;
-        let mut births = self
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get(&project)
-            .and_then(|p| p.created.clone())
-            .filter(|b| b.rev <= rev.0)
-            .unwrap_or_default();
-        if births.rev == rev.0 {
-            return Ok(births.units.clone());
-        }
-        use sluice_model::plan_rows::PlanChange;
-        let next = std::sync::Arc::make_mut(&mut births);
-        let created = std::sync::Arc::make_mut(&mut next.units);
-        let mut query = c.prepare_cached(
-            "SELECT rev,changes FROM plan_edits WHERE project_id=?1 AND rev>?2 AND rev<=?3 ORDER BY rev",
-        )?;
-        let edits = query.query_map((project.to_string(), next.rev as i64, rev.0 as i64), |r| {
-            Ok((r.get::<_, i64>(0)? as u64, r.get::<_, String>(1)?))
-        })?;
-        for edit in edits {
-            let (rev, changes) = edit?;
-            for change in serde_json::from_str::<Vec<PlanChange>>(&changes)? {
-                match change {
-                    PlanChange::StepPut {
-                        step, declaration, ..
-                    } => {
-                        let unit = declaration
-                            .0
-                            .get("tags")
-                            .and_then(|t| t.as_value().as_array())
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|t| t.as_str())
-                            .find_map(|t| t.strip_prefix("unit:"))
-                            .unwrap_or(step.as_str());
-                        next.steps.insert(step.to_string(), unit.to_owned());
-                    }
-                    PlanChange::StepDelete { step } => {
-                        next.steps.remove(step.as_str());
-                    }
-                    _ => {}
-                }
-            }
-            let units: BTreeSet<_> = next.steps.values().collect();
-            created.retain(|unit, _| units.contains(unit));
-            for unit in units {
-                created.entry(unit.clone()).or_insert(rev);
-            }
-        }
-        next.rev = rev.0;
-        if let Some(kept) = self
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_mut(&project)
-            .filter(|p| p.rev == rev)
-        {
-            kept.created = Some(births.clone());
-        }
-        Ok(births.units.clone())
-    }
     /// The plan kept for `(rev, signatures)`, else `compile`'s, kept in its place.
     pub fn compiled(
         &self,
@@ -1304,14 +1231,12 @@ impl PlanCache {
         drop(held);
         let plan = std::sync::Arc::new(compile()?);
         let mut held = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let created = held.get(&project).and_then(|p| p.created.clone());
         held.insert(
             project,
             CompiledPlan {
                 rev,
                 signatures: signatures.to_owned(),
                 plan: plan.clone(),
-                created,
             },
         );
         Ok(plan)
@@ -1345,7 +1270,8 @@ pub fn load_board(
         &super::home_of(c),
         project,
     )?);
-    let created = plans.created(c, project)?;
+    let mut q = c.prepare_cached("SELECT coalesce(unit,step_id),min(coalesce(unit_created_rev,0)) FROM steps WHERE project_id=?1 GROUP BY coalesce(unit,step_id)")?;
+    let created = q.query_map([project.to_string()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)? as u64)))?.collect::<std::result::Result<BTreeMap<_,_>,_>>()?;
     let mut last = last_messages(c, project, &board)?;
     let mut said = said_lately(c, project)?;
     board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
@@ -1748,7 +1674,7 @@ fn run_timings(
 ) -> sluice_store::Result<BTreeMap<String, RunTiming>> {
     let mut runs = BTreeMap::<String, Vec<Run>>::new();
     let mut q = c.prepare_cached(
-        "SELECT r.step_id,r.item_index,r.work_generation,coalesce(r.started_at,r.created_at),r.finished_at,julianday(coalesce(r.started_at,r.created_at)),julianday(coalesce(r.finished_at,'now')),julianday(r.finished_at),json_extract(r.result,'$.status'),CASE WHEN r.finished_at IS NOT NULL AND coalesce(json_extract(r.result,'$.status'),'')<>'succeeded' THEN json_extract(r.result,'$.error') END FROM runs r JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation WHERE r.project_id=?1 ORDER BY r.step_id,r.created_at,r.run_id",
+        "SELECT r.step_id,r.item_index,r.work_generation,coalesce(r.started_at,r.created_at),r.finished_at,julianday(coalesce(r.started_at,r.created_at)),julianday(coalesce(r.finished_at,'now')),julianday(r.finished_at),r.result_status,CASE WHEN r.finished_at IS NOT NULL AND coalesce(r.result_status,'')<>'succeeded' THEN r.result_error END FROM steps s CROSS JOIN runs r INDEXED BY runs_step_timing ON s.project_id=r.project_id AND s.step_id=r.step_id AND s.generation=r.generation WHERE s.project_id=?1 ORDER BY r.step_id,r.created_at,r.run_id",
     )?;
     let mut rows = q.query([project.to_string()])?;
     while let Some(r) = rows.next()? {
@@ -1923,42 +1849,35 @@ fn last_messages(
     let wanted: BTreeSet<&str> = board.units.iter().map(|u| u.id.as_str()).collect();
     let mut own: BTreeMap<String, LastMessage> = BTreeMap::new();
     let mut sent_to: BTreeMap<String, LastMessage> = BTreeMap::new();
-    let mut messages = c.prepare(
-        "SELECT \"from\",\"to\",thread,body,at,id FROM messages WHERE project_id=?1 ORDER BY id DESC",
+    // Three indexed seeks per current step, independent of retired message history.
+    let mut latest = c.prepare_cached(
+        "SELECT id FROM messages WHERE project_id=?1 AND \"from\"=?2 ORDER BY id DESC LIMIT 1",
     )?;
-    let mut rows = messages.query([project.to_string()])?;
-    while own.len() < wanted.len()
-        && let Some(r) = rows.next()?
-    {
-        let (from, to, thread): (String, Option<String>, String) =
-            (r.get(0)?, r.get(1)?, r.get(2)?);
-        let mine = [
-            unit_of.get(&from),
-            thread
-                .strip_prefix("step-")
-                .and_then(|step| unit_of.get(step)),
-        ];
-        let message = |received| -> rusqlite::Result<LastMessage> {
-            Ok((
-                r.get(3)?,
-                r.get(4)?,
-                from.clone(),
-                thread.clone(),
-                r.get(5)?,
-                received,
-            ))
-        };
-        for unit in mine.into_iter().flatten() {
-            if wanted.contains(unit.as_str()) && !own.contains_key(unit) {
-                own.insert(unit.clone(), message(false)?);
+    let mut thread_latest = c.prepare_cached(
+        "SELECT id FROM messages WHERE project_id=?1 AND thread=?2 ORDER BY id DESC LIMIT 1",
+    )?;
+    let mut received_latest = c.prepare_cached(
+        "SELECT id FROM messages WHERE project_id=?1 AND \"to\"=?2 ORDER BY id DESC LIMIT 1",
+    )?;
+    let mut ids = BTreeSet::new();
+    for step in unit_of.keys() {
+        for (query, key) in [(&mut latest, step.clone()), (&mut thread_latest, format!("step-{step}")), (&mut received_latest, step.clone())] {
+            if let Some(id) = query.query_row((project.to_string(), key), |r| r.get::<_, i64>(0)).optional()? {
+                ids.insert(id);
             }
         }
-        if let Some(unit) = to.and_then(|to| unit_of.get(&to))
-            && wanted.contains(unit.as_str())
-            && !own.contains_key(unit)
-            && !sent_to.contains_key(unit)
-        {
-            sent_to.insert(unit.clone(), message(true)?);
+    }
+    let mut message = c.prepare_cached("SELECT \"from\",\"to\",thread,body,at,id FROM messages WHERE id=?1")?;
+    for id in ids.into_iter().rev() {
+        let (from, to, thread, body, at, id): (String, Option<String>, String, String, String, i64) = message.query_row([id], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
+        let mine = [unit_of.get(&from), thread.strip_prefix("step-").and_then(|s| unit_of.get(s))];
+        for unit in mine.into_iter().flatten() {
+            if wanted.contains(unit.as_str()) {
+                own.entry(unit.clone()).or_insert_with(|| (body.clone(),at.clone(),from.clone(),thread.clone(),id,false));
+            }
+        }
+        if let Some(unit) = to.and_then(|to| unit_of.get(&to)) && wanted.contains(unit.as_str()) {
+            sent_to.entry(unit.clone()).or_insert((body,at,from,thread,id,true));
         }
     }
     for (unit, message) in sent_to {
@@ -1988,23 +1907,19 @@ fn said_lately(
         unit_of.insert(r.get::<_, String>(0)?, r.get::<_, String>(1)?);
     }
     let mut out: BTreeMap<String, Vec<(String, f64)>> = BTreeMap::new();
-    let mut messages =
-        c.prepare_cached("SELECT \"from\",at FROM messages WHERE project_id=?1 ORDER BY id DESC")?;
-    let mut rows = messages.query([project.to_string()])?;
-    while let Some(r) = rows.next()? {
-        let (from, at): (String, String) = (r.get(0)?, r.get(1)?);
-        let Some(t) = super::timestamp(&at).map(|t| t as f64) else {
-            continue;
-        };
-        if t < now - SAID_WINDOW {
-            break;
-        }
-        if let Some(unit) = unit_of.get(&from) {
-            out.entry(unit.clone()).or_default().push((from, t));
+    let since = super::rfc3339((now - SAID_WINDOW).max(0.0) as u64);
+    let mut messages = c.prepare_cached("SELECT at FROM messages WHERE project_id=?1 AND \"from\"=?2 AND at>=?3 ORDER BY at,id")?;
+    for (step, unit) in unit_of {
+        let mut rows = messages.query((project.to_string(), &step, &since))?;
+        while let Some(r) = rows.next()? {
+            let at: String = r.get(0)?;
+            if let Some(t) = super::timestamp(&at) {
+                out.entry(unit.clone()).or_default().push((step.clone(), t as f64));
+            }
         }
     }
     for said in out.values_mut() {
-        said.reverse();
+        said.sort_by(|a,b| a.1.total_cmp(&b.1));
     }
     Ok(out)
 }
@@ -2253,6 +2168,7 @@ impl BoardQuery {
     /// Filter and find in `view` as the page's query asks. The plan keeps a unit whole: a find
     /// or a chain keeps the units with a step in it, never part of one.
     pub fn apply(&self, view: &mut ProjectView) -> Result<(), PublicError> {
+        view.folds = self.datastar.as_deref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).and_then(|s| s.get("folds").cloned()).and_then(|s| serde_json::from_value(s).ok()).unwrap_or_default();
         let show = self.show.as_deref().unwrap_or("all");
         if !["all", "active", "attention", "done"].contains(&show)
             || self

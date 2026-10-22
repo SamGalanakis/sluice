@@ -498,23 +498,22 @@ pub async fn load(
     registry: Option<&board::Registry>,
     zone: i64,
 ) -> Result<(DashboardSnapshot, HomeView), PublicError> {
-    let inbox = threads::load(&state.reads, None, sluice_model::commands::MessageView::Questions, None).await?;
-    let questions: Vec<threads::MessageItem> =
-        inbox.for_you_rows().into_iter().cloned().collect();
+    let projects = state.reads.clock_snapshot(|c| {
+        let mut q = c.prepare_cached("SELECT project_id FROM projects WHERE deleted_at IS NULL AND NOT archived AND EXISTS(SELECT 1 FROM steps WHERE steps.project_id=projects.project_id)")?;
+        Ok(q.query_map([], |r| r.get::<_,String>(0))?.collect::<std::result::Result<Vec<_>,_>>()?)
+    }).await.map_err(|e|e.into_public(true))?;
     let now = day::now();
     // each project's signatures, as its plan page reads them
     let mut providers = vec![];
-    for p in inbox.nav.projects.iter().filter(|p| !p.archived && p.counts.total() > 0) {
-        let exact = match registry {
-            Some(r) => r.0.signatures(p.id).ok(),
-            None => None,
-        };
-        let catalog = state.catalog.catalog(Some(p.id))?;
-        providers.push((p.id, exact, catalog));
+    for raw in projects {
+        let id: ProjectId = raw.parse().map_err(|e| PublicError::Storage {message:format!("{e}")})?;
+        let exact = match registry { Some(r) => r.0.signatures(id).ok(), None => None };
+        let catalog = state.catalog.catalog(Some(id))?;
+        providers.push((id,exact,catalog));
     }
     let plans = state.plans.clone();
     let functions = state.catalog.catalog(None)?;
-    let (shared, boards, data) = state
+    let (shared, boards, data, questions) = state
         .reads
         .clock_snapshot(move |c| {
             let shared = load_snapshot(c, functions)?;
@@ -543,8 +542,9 @@ pub async fn load(
                     boards.insert(*id, board);
                 }
             }
-            let data = day::load(c, None, now)?;
-            Ok((shared, boards, data))
+            let data = day::load_brief(c, now)?;
+            let questions = threads::home_questions(c,&shared)?;
+            Ok((shared, boards, data, questions))
         })
         .await
         .map_err(|e| e.into_public(true))?;

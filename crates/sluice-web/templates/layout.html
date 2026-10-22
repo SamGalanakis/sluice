@@ -13,7 +13,7 @@
 <div class="mainarea">
 {%- include "bar.html" %}
 {% if !frame.head.as_str().is_empty() %}<div class="wrap page-top">{{ frame.head|safe }}</div>{% endif %}
-<main id="content" class="wrap" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}"{% endif %}>
+<main id="content" class="wrap" tabindex="-1"{% if !stream.is_empty() %} data-init="{{ crate::views::ui::stream_get(stream) }}" data-on:sluice-roster-fold="$folds[evt.detail.id] = evt.detail.open; {{ crate::views::ui::stream_get(stream) }}"{% endif %}>
 {{ crate::views::ui::banners(stream)|safe }}
 {{ body|safe }}
 </main>

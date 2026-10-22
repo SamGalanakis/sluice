@@ -26,6 +26,19 @@ pub(crate) const TABLES: i64 = 27;
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("projects", "settings_undo", "TEXT NOT NULL DEFAULT '{}'"),
     ("runs", "restart_after", "INTEGER"),
+    // JSON remains authoritative, including writes from pinned older releases. Generated
+    // columns and covering indexes project its small facts without reading result bodies.
+    (
+        "runs",
+        "result_status",
+        "TEXT GENERATED ALWAYS AS (json_extract(result,'$.status')) VIRTUAL",
+    ),
+    (
+        "runs",
+        "result_error",
+        "TEXT GENERATED ALWAYS AS (json_extract(result,'$.error')) VIRTUAL",
+    ),
+    ("steps", "unit_created_rev", "INTEGER"),
     ("steps", "restart_count", "INTEGER NOT NULL DEFAULT 0"),
     ("steps", "restart_history", "TEXT NOT NULL DEFAULT '[]'"),
     // Retired progress history, retained for schema compatibility.
@@ -33,6 +46,60 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
         "steps",
         "progress_runs",
         "TEXT CHECK (progress_runs IS NULL OR json_valid(progress_runs))",
+    ),
+];
+const ADDED_INDEXES: &[(&str, &str)] = &[
+    (
+        "runs_step_timing",
+        "CREATE INDEX runs_step_timing ON runs(project_id,step_id,generation,created_at,run_id,item_index,work_generation,started_at,finished_at,result_status,result_error)",
+    ),
+    (
+        "runs_day",
+        "CREATE INDEX runs_day ON runs(finished_at,project_id,step_id,created_at,run_id,unit,item_index,started_at,result_status,result_error)",
+    ),
+    (
+        "runs_step_order",
+        "CREATE INDEX runs_step_order ON runs(project_id,step_id,created_at,run_id)",
+    ),
+    (
+        "runs_project_end",
+        "CREATE INDEX runs_project_end ON runs(project_id,finished_at,started_at,created_at) WHERE step_id IS NOT NULL",
+    ),
+    (
+        "runs_step_changed",
+        "CREATE INDEX runs_step_changed ON runs(project_id,step_id,coalesce(finished_at,started_at,created_at))",
+    ),
+    (
+        "messages_sender_time",
+        "CREATE INDEX messages_sender_time ON messages(project_id,\"from\",at,id)",
+    ),
+    (
+        "records_step_status",
+        "CREATE INDEX records_step_status ON records(project_id,step_id,at) WHERE kind='step.status'",
+    ),
+    (
+        "messages_owner_notes",
+        "CREATE INDEX messages_owner_notes ON messages(\"to\",needs_reply,project_id,thread,id)",
+    ),
+    (
+        "messages_resolved",
+        "CREATE INDEX messages_resolved ON messages(project_id,resolved_by) WHERE needs_reply=1",
+    ),
+    (
+        "messages_sender",
+        "CREATE INDEX messages_sender ON messages(project_id,\"from\",id,at)",
+    ),
+];
+// These triggers also maintain the projection for older pinned writers. They never change
+// authored declarations or runtime state. A unit keeps its birth while any member survives.
+const ADDED_TRIGGERS: &[(&str, &str)] = &[
+    (
+        "steps_birth_insert",
+        "CREATE TRIGGER steps_birth_insert AFTER INSERT ON steps WHEN NEW.unit_created_rev IS NULL BEGIN UPDATE steps SET unit_created_rev=coalesce((SELECT min(unit_created_rev) FROM steps WHERE project_id=NEW.project_id AND coalesce(unit,step_id)=coalesce(NEW.unit,NEW.step_id) AND step_id<>NEW.step_id),(SELECT rev+1 FROM plans WHERE project_id=NEW.project_id),0) WHERE project_id=NEW.project_id AND step_id=NEW.step_id; END",
+    ),
+    (
+        "steps_birth_move",
+        "CREATE TRIGGER steps_birth_move AFTER UPDATE OF unit ON steps WHEN coalesce(OLD.unit,OLD.step_id)<>coalesce(NEW.unit,NEW.step_id) BEGIN UPDATE steps SET unit_created_rev=coalesce((SELECT min(unit_created_rev) FROM steps WHERE project_id=NEW.project_id AND coalesce(unit,step_id)=coalesce(NEW.unit,NEW.step_id) AND step_id<>NEW.step_id),(SELECT rev+1 FROM plans WHERE project_id=NEW.project_id),0) WHERE project_id=NEW.project_id AND step_id=NEW.step_id; END",
     ),
 ];
 /// Views added after schema 4 homes exist, as `(name, definition)`.
@@ -228,16 +295,32 @@ pub(crate) fn open_writer(home: &Path, timeout: Duration) -> Result<Connection> 
 /// Add a verified home's missing `ADDED_COLUMNS` and `ADDED_VIEWS`, in one immediate
 /// transaction; a home already in shape is left alone.
 pub(crate) fn conform(connection: &mut Connection) -> Result<()> {
-    if missing_columns(connection)?.is_empty() && missing_views(connection)?.is_empty() {
+    if missing_columns(connection)?.is_empty()
+        && missing_views(connection)?.is_empty()
+        && missing_indexes(connection)?.is_empty()
+        && missing_objects(connection, "trigger", ADDED_TRIGGERS)?.is_empty()
+    {
         return Ok(());
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let backfill_births = missing_columns(&transaction)?
+        .iter()
+        .any(|(_, column, _)| *column == "unit_created_rev");
     for (table, column, definition) in missing_columns(&transaction)? {
         transaction.execute_batch(&format!(
             "ALTER TABLE {table} ADD COLUMN {column} {definition}"
         ))?;
     }
     for definition in missing_views(&transaction)? {
+        transaction.execute_batch(definition)?;
+    }
+    if backfill_births {
+        backfill_unit_births(&transaction)?;
+    }
+    for definition in missing_objects(&transaction, "trigger", ADDED_TRIGGERS)? {
+        transaction.execute_batch(definition)?;
+    }
+    for definition in missing_indexes(&transaction)? {
         transaction.execute_batch(definition)?;
     }
     transaction.commit()?;
@@ -262,7 +345,7 @@ fn missing_columns(
     let mut missing = Vec::new();
     for &(table, column, definition) in ADDED_COLUMNS {
         let present: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name=?2)",
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo(?1) WHERE name=?2)",
             [table, column],
             |row| row.get(0),
         )?;
@@ -286,6 +369,83 @@ fn missing_views(connection: &Connection) -> Result<Vec<&'static str>> {
         }
     }
     Ok(missing)
+}
+
+fn missing_indexes(connection: &Connection) -> Result<Vec<&'static str>> {
+    missing_objects(connection, "index", ADDED_INDEXES)
+}
+fn missing_objects(
+    connection: &Connection,
+    kind: &str,
+    definitions: &[(&str, &'static str)],
+) -> Result<Vec<&'static str>> {
+    let mut missing = Vec::new();
+    for &(name, definition) in definitions {
+        let present: bool = connection.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type=?1 AND name=?2)",
+            [kind, name],
+            |row| row.get(0),
+        )?;
+        if !present {
+            missing.push(definition);
+        }
+    }
+    Ok(missing)
+}
+/// Replay once, at additive migration, rather than on the first dashboard request. The
+/// log is authoritative; units retain their revision across changes to their membership.
+fn backfill_unit_births(sql: &Connection) -> Result<()> {
+    use sluice_model::plan_rows::PlanChange;
+    use std::collections::{BTreeMap, BTreeSet};
+    let mut projects = sql.prepare("SELECT project_id FROM projects")?;
+    let ids = projects
+        .query_map([], |r| r.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let mut edits =
+        sql.prepare("SELECT rev,changes FROM plan_edits WHERE project_id=?1 ORDER BY rev")?;
+    for id in ids {
+        let mut steps = BTreeMap::<String, String>::new();
+        let mut births = BTreeMap::<String, i64>::new();
+        let mut rows = edits.query([&id])?;
+        while let Some(row) = rows.next()? {
+            let rev: i64 = row.get(0)?;
+            for change in serde_json::from_str::<Vec<PlanChange>>(&row.get::<_, String>(1)?)? {
+                match change {
+                    PlanChange::StepPut {
+                        step, declaration, ..
+                    } => {
+                        let unit = declaration
+                            .0
+                            .get("tags")
+                            .and_then(|t| t.as_value().as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|t| t.as_str())
+                            .find_map(|t| t.strip_prefix("unit:"))
+                            .unwrap_or(step.as_str());
+                        steps.insert(step.to_string(), unit.to_owned());
+                    }
+                    PlanChange::StepDelete { step } => {
+                        steps.remove(step.as_str());
+                    }
+                    _ => {}
+                }
+            }
+            let units: BTreeSet<_> = steps.values().collect();
+            births.retain(|unit, _| units.contains(unit));
+            for unit in units {
+                births.entry(unit.clone()).or_insert(rev);
+            }
+        }
+        for (unit, rev) in births {
+            sql.execute("UPDATE steps SET unit_created_rev=?3 WHERE project_id=?1 AND coalesce(unit,step_id)=?2",rusqlite::params![id,unit,rev])?;
+        }
+    }
+    sql.execute(
+        "UPDATE steps SET unit_created_rev=0 WHERE unit_created_rev IS NULL",
+        [],
+    )?;
+    Ok(())
 }
 
 fn verify(connection: &Connection) -> Result<()> {

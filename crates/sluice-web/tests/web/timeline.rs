@@ -417,6 +417,6 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     // the live one a row, the done ones in the Done index
     assert_eq!(plan_html::place(&html, "r1"), "running");
     for unit in ["d1", "d2", "d3"] {
-        assert_eq!(plan_html::done_lines(&html, unit), 1, "{unit}");
+        assert_eq!(plan_html::done_lines(&html, unit), 0, "{unit}");
     }
 }

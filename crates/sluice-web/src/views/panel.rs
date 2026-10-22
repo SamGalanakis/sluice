@@ -783,6 +783,7 @@ struct Draw<'a> {
     queries: &'a BTreeMap<String, QueryOutcome>,
     buttons: usize,
     fields: usize,
+    parts: usize,
     out: String,
 }
 
@@ -811,6 +812,7 @@ fn render(
         queries,
         buttons: 0,
         fields: 0,
+        parts: 0,
         out: String::new(),
     };
     let rev = loaded.rev;
@@ -875,6 +877,9 @@ impl Draw<'_> {
         }
     }
     fn component(&mut self, c: &Component) {
+        let part = self.parts;
+        self.parts += 1;
+        let _ = write!(self.out, "<!--r:board-part-{part}--><div id=\"board-part-{part}\" class=\"board-part\">");
         match c.name.as_str() {
             "Stack" => {
                 let row = c.str_arg(1) == Some("row");
@@ -993,6 +998,7 @@ impl Draw<'_> {
             "LatestMessage" => self.warned(c, Self::latest_message),
             other => self.component_error(c, &format!("{other} is not a board component")),
         }
+        let _ = write!(self.out, "</div><!--/r:board-part-{part}-->");
     }
     fn field(&mut self, c: &Component) {
         let index = self.fields;
@@ -1128,6 +1134,8 @@ impl Draw<'_> {
         self.out.push_str("<div class=\"scroll ou-table-wrap\"><table class=\"ou-table board-units\" role=\"table\"><thead role=\"rowgroup\"><tr role=\"row\"><th scope=\"col\" role=\"columnheader\">Unit</th><th scope=\"col\" role=\"columnheader\">State</th><th scope=\"col\" role=\"columnheader\">Steps</th><th scope=\"col\" role=\"columnheader\">Waiting on</th></tr></thead><tbody role=\"rowgroup\">");
         let mut marks = BTreeSet::new();
         for row in &data.rows {
+            let row_id = format!("board-unit-{:x}", crate::streams::skeleton_hash(&format!("{}:{}", c.line, row.unit)));
+            let _ = write!(self.out, "<!--r:{row_id}-->");
             // the unit and its steps as the plan reads them; the tool's own reading if the
             // board lacks the unit
             let (shown, steps) = match data.looks.get(&row.unit) {
@@ -1168,7 +1176,7 @@ impl Draw<'_> {
                 .join(" ");
             let _ = write!(
                 self.out,
-                "<tr role=\"row\"><td class=\"u-unit\" role=\"cell\"><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\" role=\"cell\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\" role=\"cell\">{4}</td><td class=\"u-wait\" role=\"cell\">{5}</td></tr>",
+                "<tr id=\"{row_id}\" role=\"row\"><td class=\"u-unit\" role=\"cell\"><a href=\"{base}/units/{0}\">{0}</a></td><td class=\"u-state\" role=\"cell\">{1}<span>{2}</span>{3}</td><td class=\"u-steps\" role=\"cell\">{4}</td><td class=\"u-wait\" role=\"cell\">{5}</td></tr>",
                 esc(&row.unit),
                 super::ui::mark(shown),
                 esc(shown.word()),
@@ -1176,6 +1184,7 @@ impl Draw<'_> {
                 steps,
                 prose(&waiting)
             );
+            let _ = write!(self.out, "<!--/r:{row_id}-->");
         }
         self.out.push_str("</tbody></table></div>");
         // the key to the marks the table shows, in one line, in the table's order

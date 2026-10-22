@@ -306,7 +306,7 @@ in `sluice_order_<p>` and read alike by pages and streams.
 
 There are no boxes at rest. A page is the sheet; its regions are rows between hairlines.
 
-- **A hairline list** (`.hl`, Needs you, At work, History, the Done index, a step's
+- **A hairline list** (`.hl`, Needs you, At work, History, a step's
   calls): rows divided by `--line`, the section's first line its top.
 - **A row** lights `--wash` on hover and stands on `--active` while it is open or current.
 - **A module** (`ui::module_open`, `.mod`, on the grid): a part of a step or unit page (Now,
@@ -385,7 +385,7 @@ so a change patches what it moved and nothing else.
 - **The lead sentence**: "3 at work · 4 waiting · 70 of 81 done". When something needs the
   owner it leads: "1 question for you · 2 failed · 3 at work · 4 waiting · 70 of 81 done". Items
   set aside do not ask for attention in this line. Waiting units that have not begun are counted after At work, omitted
-  when none wait. The done count links to the Done index when any unit is done. There is no
+  when none wait. The done count links to History when any unit is done. There is no
   step count or separate clause for long runs.
 - **Needs you** (`ui::need_line`): a hairline row an item, in a grid of a mark column, the
   sentence and the actions. The mark: a teal dot a question, a red square a failure, an ochre
@@ -414,7 +414,8 @@ so a change patches what it moved and nothing else.
   a quiet warning. A failure, question or silence past `long_run_quiet_h` (24 hours by default)
   still enters Needs you. In a big roster remarkable rows stay visible while healthy rows fold
   to one line ("+7 running · each heard from in the last 11m"). Folds preserve `open` and the
-  project's session memory restores it.
+  project's session memory restores it. A closed healthy group carries only its summary;
+  opening it updates the `folds` signal and reopens the page's single stream to load its rows.
 - **A row** (`roster_row`, a `<details>`): a grid of the engine chip (a blue agent badge, the
   engine's name; the column kept, empty, for a fn), then the title (600, two lines at most) with
   its owner only when it differs from the project fallback and varies across rows; the current
@@ -446,9 +447,8 @@ so a change patches what it moved and nothing else.
   Mark as seen, Undo and the pagination links also have 44px targets.
 - **Finished today**: a quiet “N finished today · History →” directly below At work, only when
   at least one unit finished on the reader's current day. The default Plan has no finished rows;
-  its Done index appears only when a filter asks for it.
-- **Done**, asked for (Show: Done, a find, a recipe's units): the index, a dense list newest
-  first in columns.
+  finished work belongs to History. Legacy `show=done`, searches and recipe filters link
+  to History instead of including a Done grid.
 - **The board column** (a project with a board, Both from 1280px): the board's document and its
   program beside the plan behind the splitter (a hairline that lights while dragged), on the
   same sheet and hairlines, its metric tiles and tables the kit's, no gradients or fills of its
@@ -524,7 +524,8 @@ for each.
   [SSE events: datastar-patch-elements](https://data-star.dev/reference/sse_events)).
   A page's stream (`streams::page_events`) renders the page again and sends each region that
   changed (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds;
-  it never sends a fragment built for the patch. Plan group, quiet and unit folds preserve
+  it sends only the smallest region whose data changed, including a row's latest message,
+  stage track, pulse strip and drill stamp separately. The roster count arrives as a signal patch. Plan group, quiet and unit folds preserve
   `open`, with project-scoped session memory restoring re-created folds; a group's initial
   default applies only before the viewer has chosen. Counts have their own regions, so count
   or activity changes alone leave the roster skeleton unchanged. A quiet page sends nothing.
@@ -554,7 +555,10 @@ for each.
   signal and opens the stream again. History's Mark as seen does the same with `seen` on its
   own stream address, keeping `?page=`. The open one is ended by Datastar's
   `requestCancellation` ('auto': a newer request to the same address from the page cancels the
-  older). The page's own stream asks 'cleanup' too, so it ends with its element.
+  older). The page's stream uses `cleanup`, including when reopened, so it ends with its
+  owner element. A closed roster group sends its summary alone; opening it updates the
+  `folds` signal and replaces the existing stream. Closed unit rows fetch their drill only
+  when opened. An open drill refreshes only when its data stamp changes.
 - **Browser history is navigation only.** Datastar has no router and leaves the address to the page. The
   one thing in it beyond the server's own query is the drawer's step, `#step:<id>`: an open step
   is something to link, reload and go Back from, so it is the address's fragment, set by plain
@@ -789,7 +793,9 @@ A lane that redraws a page writes its notes here.
   owner.
 - **The inbox, Questions and a thread**: the messages' switch under the lead. Questions to the
   owner come first as question cards, answered in place; then those between agents, the ones
-  nobody waits on and the unread notes (Mark read after them). A conversation's messages are
+  nobody waits on and the latest 50 unread notes. Notes are short previews linked to their
+  conversations, with Older notes and Read notes links; no hidden conversation bodies ship.
+  Mark read advances that thread's read watermark. A conversation's messages are
   rows between hairlines, each with its avatar and Details, the message box under a hairline.
 - **Home** (`/`): the lead sentence of counts alone ("3 questions for you, 2 failed, 1 quiet; 63
   running in 4 projects."); "Runner stopped" under it in ochre. For you is the Needs-you list, a

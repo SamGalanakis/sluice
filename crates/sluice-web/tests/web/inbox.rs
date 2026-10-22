@@ -223,7 +223,8 @@ async fn p605_views_keep_questions_separate_and_advance_only_the_rendered_thread
         .render(&Viewer::default(), "/inbox", "/inbox/stream")
         .unwrap();
     assert!(
-        html.as_str().find("Owner question").unwrap() < html.as_str().find("Unread notes").unwrap()
+        html.as_str().find("Owner question").unwrap()
+            < html.as_str().find("id=\"notes-h\"").unwrap()
     );
     let router = inbox::router(state.clone());
     // Mark read: its form, the watermark of what the page drew
@@ -864,4 +865,45 @@ async fn closing_then_undo_reopens_an_answerable_question_with_a_record() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn notes_are_bounded_previews_and_older_notes_remain_reachable() {
+    let (_home, writer, project, state, _) = fixture().await;
+    for n in 0..51 {
+        post(&writer, project, serde_json::json!({"thread":format!("note-{n}"), "body":format!("Note {n}. {} HIDDEN-END", "long body ".repeat(200))})).await;
+    }
+    let page = threads::load(&state.dashboard.reads, None, MessageView::Inbox, None)
+        .await
+        .unwrap();
+    assert_eq!(page.unread_notes(), 50);
+    let before = page.older_notes.expect("older page");
+    let html = page.body().unwrap();
+    assert!(
+        !html.as_str().contains("HIDDEN-END"),
+        "hidden bodies must never be shipped"
+    );
+    assert!(html.as_str().contains("Older notes →"));
+    assert!(html.as_str().len() < 100_000);
+    let older = threads::load_page(
+        &state.dashboard.reads,
+        None,
+        MessageView::Inbox,
+        None,
+        Some(before),
+    )
+    .await
+    .unwrap();
+    assert_eq!(older.unread_notes(), 1);
+    assert!(older.older_notes.is_none());
+    assert!(older.threads[0].messages[0].title().starts_with("Note 0."));
+    let full = threads::load(
+        &state.dashboard.reads,
+        Some(project),
+        MessageView::Thread,
+        Some("note-0".into()),
+    )
+    .await
+    .unwrap();
+    assert!(full.body().unwrap().as_str().contains("HIDDEN-END"));
 }

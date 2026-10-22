@@ -66,6 +66,7 @@ pub fn router(state: MessageState) -> Router {
 #[derive(Clone, Deserialize, Default)]
 pub struct MessageQuery {
     pub thread: Option<String>,
+    pub before: Option<i64>,
     pub datastar: Option<String>,
 }
 fn view(path: &str) -> MessageView {
@@ -109,7 +110,11 @@ async fn page(
                 .finish(),
         );
     }
-    match threads::load(&state.dashboard.reads, project, view(&path), query.thread)
+    if let Some(before) = query.before {
+        stream.push(if stream.contains('?') { '&' } else { '?' });
+        stream.push_str(&format!("before={before}"));
+    }
+    match threads::load_page(&state.dashboard.reads, project, view(&path), query.thread, query.before)
         .await
         .and_then(|page| page.render(&Viewer::from_headers(&headers), &path, &stream))
     {
@@ -154,7 +159,7 @@ async fn stream(
             let query = query.clone();
             async move {
                 let page =
-                    threads::load(&state.dashboard.reads, project, view(&path), query.thread)
+                    threads::load_page(&state.dashboard.reads, project, view(&path), query.thread, query.before)
                         .await?;
                 let nav = super::NavView::new(&page.nav, project, page.tab())?;
                 let mut regions = vec![PatchRegion::new("messages-view", page.body()?)];

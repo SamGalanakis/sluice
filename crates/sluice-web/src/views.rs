@@ -493,8 +493,8 @@ impl DashboardState {
         let (sum, count, running): (i64, i64, bool) = self.clock.scope(self.reads
             .clock_snapshot(move |c| {
                 let (sum, count) = c.query_row(
-                    "SELECT coalesce(sum(version),0),count(*) FROM change_versions",
-                    [],
+                    "SELECT coalesce(sum(version),0),count(*) FROM change_versions WHERE ?1 IS NULL OR project_id IS NULL OR project_id=?1 OR view IN ('projects','status','messages','questions','readers')",
+                    [project.map(|p|p.to_string())],
                     |r| Ok((r.get(0)?, r.get(1)?)),
                 )?;
                 let running = match (project, live) {

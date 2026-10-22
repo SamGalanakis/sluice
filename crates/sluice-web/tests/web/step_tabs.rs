@@ -384,14 +384,11 @@ async fn tabs_values_and_owner_conversations() {
         // the inbox draws its unread notes the same way, flat in their card, no New line
         let (_, inbox) = f.get("/inbox").await;
         let notes = between(&inbox, "<section class=\"notes\"", "</section>");
-        assert!(notes.contains("<div class=\"convo\">"), "{notes}");
+        assert!(!notes.contains("<div class=\"convo\">"), "{notes}");
         assert!(
             notes.contains("The summary is ready.") && !notes.contains("m-new"),
             "{notes}"
         );
-        assert!(
-            notes.contains("<p class=\"mg-head\"><span class=\"who who-this\">This step</span>"),
-            "{notes}"
-        );
+        assert!(notes.contains("/thread?thread=step-alpha-build"), "{notes}");
     }
 }

@@ -75,11 +75,21 @@ rocket("sluice-board", {
     on(host, "toggle", (event) => {
       const d = event.target;
       if (!(d instanceof HTMLDetailsElement) || !d.closest("#plan-pane") || !host.contains(d)) return;
+      if (d.hasAttribute("data-roster-fold") && d.open !== (d.dataset.foldLoaded === "true")) d.dispatchEvent(new CustomEvent("sluice-roster-fold", { bubbles: true, detail: { id: d.id, open: d.open } }));
       try { sessionStorage.setItem(foldPrefix + foldKey(d), d.open ? "open" : "closed"); }
       catch { /* preserve attributes still work without storage */ }
     }, { capture: true });
-    restoreFolds();
-    observe(host, restoreFolds, { childList: true, subtree: true });
+    const drillStamps = new WeakMap();
+    const refreshOpen = () => {
+      restoreFolds();
+      for (const row of host.querySelectorAll(".ro-u")) {
+        const before = drillStamps.get(row), stamp = row.querySelector("[data-drill-stamp]")?.dataset.drillStamp;
+        drillStamps.set(row, stamp);
+        if (row.open && before !== undefined && before !== stamp) row.dispatchEvent(new Event("toggle"));
+      }
+    };
+    refreshOpen();
+    observe(host, refreshOpen, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-drill-stamp"] });
 
     // ---- the board column ----
     // It scrolls on its own and is at most the window's height once it sticks; until the page

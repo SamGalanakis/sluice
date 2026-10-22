@@ -49,7 +49,7 @@ async fn read_for(body: &mut (impl Stream<Item = Bytes> + Unpin), window: Durati
 /// The first batch: everything up to its signals.
 async fn first_batch(body: &mut (impl Stream<Item = Bytes> + Unpin)) -> String {
     let mut text = String::new();
-    while !text.contains("datastar-patch-signals") {
+    while !text.contains("\"stale\"") && !text.contains("\"sstale\"") {
         let chunk = tokio::time::timeout(Duration::from_secs(10), body.next())
             .await
             .expect("a first batch")

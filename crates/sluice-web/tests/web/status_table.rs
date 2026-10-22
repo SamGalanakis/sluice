@@ -287,14 +287,12 @@ async fn states_priorities_cancellation_and_skipped_units() {
             // steps its mark and word
             match state.spec().band {
                 sluice_model::shown::Band::Done => {
-                    let line = between(
-                        plan_html::band(&index, "plan-done"),
-                        &format!("/{step}\"><span class=\"pl-at\">"),
-                        "</li>",
+                    assert!(index.contains(&format!("href=\"/projects/id/{id}/history\"")));
+                    let (_, page) = f.get(&format!("/projects/id/{id}/steps/{step}")).await;
+                    assert!(
+                        page.contains(&format!("g g-{}\"", state.key())),
+                        "{state:?}: {page}"
                     );
-                    let item = &index[..index.find(line).unwrap() + line.len()];
-                    let item = &item[item.rfind("<li ").unwrap()..];
-                    assert!(item.contains(&glyph(state)), "{state:?}: {item}");
                 }
                 _ if matches!(state, Shown::Failed | Shown::Cancelled | Shown::Stale) => {
                     let module = plan_html::stopped(plan, &step);
@@ -597,10 +595,7 @@ async fn states_priorities_cancellation_and_skipped_units() {
             .await;
         let (_, html) = f.get(&format!("/projects/id/{id}?show=done")).await;
         let done = plan_html::band(&html, "plan-done");
-        let at = done.find("/units/k\"><span class=\"pl-at\">").unwrap();
-        let line = &done[done[..at].rfind("<li ").unwrap()..];
-        let line = &line[..line.find("</li>").unwrap()];
-        assert!(line.contains(&glyph(Shown::Skipped)), "{line}");
+        assert!(done.contains("finished units · History →"), "{done}");
         let (_, page) = f.get(&format!("/projects/id/{id}/units/w")).await;
         assert!(
             between(&page, "<h1 class=\"unit-h\">", "</h1>").contains(&glyph(Shown::Pending)),
