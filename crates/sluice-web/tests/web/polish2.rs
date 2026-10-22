@@ -183,49 +183,6 @@ async fn a_step_with_messages_has_a_messages_tab() {
     );
 }
 
-#[tokio::test]
-async fn a_failure_says_what_to_try() {
-    let f = Fixture::new().await;
-    let id = f
-        .project(
-            "capped",
-            json!({"steps":{"q":{"run":"custom.open"},"r":{"run":"custom.open"}}}),
-            &[("q", "failed"), ("r", "running")],
-        )
-        .await;
-    let quota = PublicError::AgentFailure {
-        retry_at: None,
-        kind: "QuotaExhausted".into(),
-        message: "usage cap".into(),
-        session: None,
-    };
-    let error = serde_json::to_string(&quota).unwrap();
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            tx.sql().execute(
-                "UPDATE steps SET error=?2 WHERE project_id=?1 AND step_id='q'",
-                (id.to_string(), error),
-            )?;
-            tx.changed(Some(id), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-    let (_, page) = f.get(&format!("/projects/id/{id}/steps/q")).await;
-    assert!(
-        page.contains("<p class=\"err-line\">Its engine hit a usage cap.</p>")
-            && (page
-                .contains("<p class=\"err-next\">Retry once its engine's usage cap resets.</p>")
-                || page.contains(
-                    "<p class=\"err-next\">Retry once its engine&#39;s usage cap resets.</p>"
-                )
-                || page.contains(
-                    "<p class=\"err-next\">Retry once its engine&#x27;s usage cap resets.</p>"
-                )),
-        "{page}"
-    );
-}
-
 async fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     let router = f.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

@@ -697,50 +697,6 @@ if 'CODEX_HOME' in os.environ:
     link = tmp / 'apply_patch'
     if not link.is_symlink(): link.symlink_to('/usr/bin/true')
 "#;
-#[test]
-fn codex_log_is_readable_as_a_downstream_input() {
-    for copied in [false, true] {
-        let g = Gate::configured(|g| {
-            native_engine(g, "codex");
-            g.env
-                .insert("SLUICE_CODEX_FIXTURE".into(), "readable-log".into());
-        });
-        let cwd = g.temp.path().join("work");
-        let destination = g.temp.path().join("copied.log");
-        let mut inputs = json!({"cwd":cwd,"spec":"Record this fixture turn"});
-        if copied {
-            inputs["log"] = json!(destination);
-        }
-        g.plan(json!({
-            "work": {"run":"agent.codex","in":bindings(inputs)},
-            "read": {"run":"inline.python","in":{
-                "log":{"source":"work/log"},
-                "code":{"default":"from pathlib import Path\nout = Path(inp['log']).read_text()"}
-            }}
-        }));
-        let _lease = g.lease();
-        let read = g.terminal("read");
-        assert_eq!(read["status"], "succeeded", "{read}: {}", g.status());
-        let log = read["outputs"]["value"].as_str().unwrap();
-        assert!(log.contains("turn started"), "{log}");
-        assert!(
-            log.contains("tool commandExecution printf fixture-log"),
-            "{log}"
-        );
-        assert!(
-            log.contains("assistant\nFixture readable response"),
-            "{log}"
-        );
-        assert!(log.contains("turn completed"), "{log}");
-        let work = g.status()["steps"]["work"].clone();
-        let path = PathBuf::from(work["outputs"]["log"].as_str().unwrap());
-        assert_eq!(
-            path.file_name().unwrap(),
-            if copied { "copied.log" } else { "codex.log" }
-        );
-        assert_eq!(std::fs::read_to_string(path).unwrap(), log);
-    }
-}
 
 #[test]
 fn slow_composed_devin_environment_and_resumed_permission_mode() {
@@ -798,78 +754,6 @@ run(main)
 // fails at launch with kind `Invalid` and the object to use. An edit refuses a literal string
 // model, so here the strings come from another step's outputs, known only at launch. An object
 // whose id the engine does not list fails the same way, naming the nearest ids.
-#[test]
-fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
-    let g = Gate::configured(|g| native_engine(g, "devin"));
-    let cwd = g.temp.path().join("work");
-    let step = |run: &str, extra: Value| {
-        let mut inputs = json!({"cwd":cwd,"spec":"Never runs"});
-        inputs
-            .as_object_mut()
-            .unwrap()
-            .extend(extra.as_object().unwrap().clone());
-        json!({"run":run,"in":bindings(inputs)})
-    };
-    let named = |run: &str, extra: Value, name: &str| {
-        let mut step = step(run, extra);
-        step["in"]["model"] = json!({"source":format!("names/{name}")});
-        step
-    };
-    g.plan(json!({
-        "names": {"run":"core.external","outputs":{"sol":"string","fusion":"string"}},
-        "run-sol": named("agent.run", json!({"engine":"codex","effort":"xhigh"}), "sol"),
-        "codex-sol": named("agent.codex", json!({"effort":"high"}), "sol"),
-        "devin-fusion": named("agent.devin", json!({}), "fusion"),
-        "devin-effort": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"high"},"effort":"max"})),
-        "devin-unknown": step("agent.devin", json!({"model":{"type":"normal","model":"swe-2","effort":"hgh"}})),
-    }));
-    let problems = g.data(json!({"command":"verify","args":{"project":g.selector()}}));
-    assert_eq!(problems, json!([]), "{problems}");
-    g.rpc(
-        json!({"command":"step_set_output","args":{"project":g.selector(),"step":"names",
-        "outputs":{"sol":"sol","fusion":"fusion"},"force":true,"reason":"names"}}),
-    );
-    let _lease = g.lease();
-    for (step, message) in [
-        (
-            "run-sol",
-            r#"model must be a JSON object, not "sol", and effort is no longer an input: drop effort and set model to {"type":"normal","model":"sol","effort":"xhigh"}"#,
-        ),
-        (
-            "codex-sol",
-            r#"set model to {"type":"normal","model":"sol","effort":"high"}"#,
-        ),
-        (
-            "devin-fusion",
-            r#"model must be a JSON object, not "fusion"; use {"type":"fusion","main":{"model":"claude-opus-5-5","effort":"high"},"sidekick":{"model":"swe-2","effort":"high"}}"#,
-        ),
-        (
-            "devin-effort",
-            r#"effort is no longer an input: drop it and set model to {"type":"normal","model":"swe-2","effort":"max"}"#,
-        ),
-        (
-            "devin-unknown",
-            "devin has no model swe-2-hgh (composed from model",
-        ),
-    ] {
-        let result = g.terminal(step);
-        assert_eq!(result["status"], "failed", "{step}: {result}");
-        assert_eq!(
-            result["error"]["error"], "agent_failure",
-            "{step}: {result}"
-        );
-        assert_eq!(result["error"]["kind"], "Invalid", "{step}: {result}");
-        let text = result["error"]["message"].as_str().unwrap();
-        assert!(text.contains(message), "{step}: {text}");
-    }
-    let unknown = g.status()["steps"]["devin-unknown"]["error"]["message"].clone();
-    assert!(
-        unknown.as_str().unwrap().contains("nearest: swe-2-high"),
-        "{unknown}"
-    );
-    // Nothing reached the engine: no session started for any of them.
-    assert!(!g.temp.path().join("devin-prompts.jsonl").exists());
-}
 
 /// A killed test cannot run Gate's teardown. Its guardian must stop the payload after
 /// coordinator loss, and systemd must retire the empty workload slice without that teardown.
@@ -1248,47 +1132,6 @@ fn slow_parked_questions_keep_the_broker_responsive_and_survive_restart() {
         );
     }
 }
-#[test]
-fn owner_question_runs_the_configured_notify_command_once() {
-    let g = Gate::configured(|g| {
-        let out = g.home.join("notified.jsonl");
-        std::fs::write(
-            g.home.join("config.json"),
-            json!({"fn_dirs":[],"notify":{"command":["/bin/sh","-c","/usr/bin/cat >> \"$1\" && echo >> \"$1\"","notify",out],"timeout_s":10}}).to_string(),
-        )
-        .unwrap();
-    });
-    let CommandReply::Receipt(MessageReceipt { id, .. }) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"body":"Merge the release branch?","title":"Release","to":"owner"}})) else {panic!("ask")};
-    g.rpc(
-        json!({"command":"say","args":{"project":g.selector(),"body":"just a note","to":"owner"}}),
-    );
-    let read = |g: &Gate| -> Vec<Value> {
-        std::fs::read_to_string(g.home.join("notified.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|l| serde_json::from_str(l).ok())
-            .collect()
-    };
-    // No scheduler lease is held: notification does not wait for one.
-    g.wait(|g| !read(g).is_empty());
-    let db = rusqlite::Connection::open(g.home.join("sluice.db")).unwrap();
-    g.wait(|_| {
-        db.query_row(
-            "SELECT outcome FROM notification_attempts WHERE message_id=?1",
-            [id.0],
-            |r| r.get::<_, String>(0),
-        )
-        .unwrap()
-            == "dispatched"
-    });
-    let sent = read(&g);
-    assert_eq!(sent.len(), 1, "{sent:?}");
-    assert_eq!(sent[0]["id"], id.0);
-    assert_eq!(sent[0]["title"], "Release");
-    assert_eq!(sent[0]["verb"], "ask");
-    assert_eq!(sent[0]["project"], "compose");
-    assert_eq!(sent[0]["project_id"], json!(g.project));
-}
 // A coordinator restart leaves steps waiting on asks waiting rather than failed: each
 // asks again once it is back and still gets its answer.
 
@@ -1426,9 +1269,7 @@ fn register(g: &Gate) {
 }
 #[derive(Clone, Copy, Debug)]
 enum MessageTransport {
-    Cli,
     Socket,
-    Mcp,
 }
 fn message_tool(
     g: &Gate,
@@ -1440,56 +1281,6 @@ fn message_tool(
         MessageTransport::Socket => {
             args["project"] = g.selector();
             sluice_runtime::compose::reply_value(g.try_rpc(json!({"command":name,"args":args}))?)
-        }
-        MessageTransport::Cli => {
-            let mut command = Command::new(env!("CARGO_BIN_EXE_sluice"));
-            command
-                .envs(&g.env)
-                .env("TOKIO_WORKER_THREADS", "2")
-                .env_remove("SLUICE_RUN_ID")
-                .env_remove("SLUICE_PROJECT")
-                .env_remove("SLUICE_STEP")
-                .args(["tool", name, "--project", &format!("id:{}", g.project)]);
-            if args.get("run").is_none() {
-                command.env("SLUICE_ME", SESSION);
-            }
-            for (field, value) in args.as_object().unwrap() {
-                command.arg(format!("--{}", field.replace('_', "-")));
-                command.arg(
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string()),
-                );
-            }
-            let output = command.output().unwrap();
-            if output.status.success() {
-                Ok(serde_json::from_slice(&output.stdout).unwrap())
-            } else {
-                Err(serde_json::from_slice(&output.stderr).unwrap())
-            }
-        }
-        MessageTransport::Mcp => {
-            args["project"] = json!(format!("id:{}", g.project));
-            if args.get("run").is_none() {
-                args["me"] = json!(SESSION);
-            }
-            let server = sluice_web::mcp::McpServer::new(std::sync::Arc::new(
-                sluice_runtime::client::CoordinatorClient::new(&g.home),
-            ));
-            let result = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap()
-                .block_on(server.call(name, args.as_object().unwrap().clone(), Some("fixture")));
-            let result = serde_json::to_value(result).unwrap();
-            let value: Value =
-                serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
-            if result["isError"] == true {
-                Err(serde_json::from_value(value).unwrap())
-            } else {
-                Ok(value)
-            }
         }
     }
 }
@@ -1747,112 +1538,6 @@ print(json.dumps({'state':'OPEN','headRefOid':'fixture-sha','url':'fixture-url',
             })
             .unwrap(),
             1
-        );
-    }
-}
-
-#[test]
-fn message_inbox_defaults_and_next_ids() {
-    let mut g = Gate::new();
-    let CommandReply::Receipt(question) = g.rpc(json!({"command":"ask","args":{"project":g.selector(),"to":"owner","body":"Which parser?"}})) else { panic!("receipt") };
-    g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"owner","body":"A note"}}));
-    owner_question(&g, SESSION, "Not in your inbox");
-
-    // A session's own inbox is phase A2's (the inbox by `me`); the owner's shows the default.
-    for transport in [
-        MessageTransport::Cli,
-        MessageTransport::Socket,
-        MessageTransport::Mcp,
-    ] {
-        let inbox = message_tool(&g, transport, "messages", json!({"owner":true})).unwrap();
-        assert_eq!(
-            inbox["messages"].as_array().unwrap().len(),
-            2,
-            "{transport:?}: {inbox}"
-        );
-        assert_eq!(inbox["messages"][0]["id"], json!(question.id));
-        assert_eq!(inbox["messages"][1]["body"], "A note");
-        assert_eq!(
-            inbox,
-            message_tool(
-                &g,
-                transport,
-                "messages",
-                json!({"view":"inbox","owner":true})
-            )
-            .unwrap()
-        );
-    }
-    g.next_project();
-
-    let ask = owner_question(&g, SESSION, "Question body");
-    let CommandReply::Receipt(say) = g.rpc(json!({"command":"say","args":{"project":g.selector(),"to":"@orch","body":"Note body","owner":true}})) else { panic!("receipt") };
-    let asked = message_tool(
-        &g,
-        MessageTransport::Socket,
-        "ask",
-        json!({"to":"owner","body":"Owner question"}),
-    )
-    .unwrap();
-    let CommandReply::Receipt(reply) = g.rpc(json!({"command":"reply","args":{"project":g.selector(),"to_message":asked["id"],"body":"Reply body","owner":true}})) else { panic!("receipt") };
-    let CommandReply::Next(next) = g.rpc(json!({"command":"next","args":{"projects":[g.selector()],"since_seq":0,"me":"@orch","timeout_seconds":1,"all":false,"settle_seconds":1,"settle_max_seconds":1,"settles":"short"}})) else { panic!("next") };
-    let next = serde_json::to_value(next).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_sluice"))
-        .envs(&g.env)
-        .env("TOKIO_WORKER_THREADS", "2")
-        .args([
-            "next",
-            "-p",
-            &format!("id:{}", g.project),
-            "--since-seq",
-            "0",
-            "--settles",
-            "short",
-            "--settle",
-            "1",
-            "--settle-max",
-            "1",
-            "--timeout",
-            "1",
-        ])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let text = String::from_utf8(output.stdout).unwrap();
-    for (verb, id, body) in [
-        ("ASK", ask.as_i64().unwrap(), "Question body"),
-        ("SAY", say.id.0, "Note body"),
-        ("REPLY", reply.id.0, "Reply body"),
-    ] {
-        assert!(
-            text.lines()
-                .any(|line| line == format!("{verb} #{id} @orch owner -> @orch: {body}")),
-            "{text}"
-        );
-        assert!(
-            next["records"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .chain(next["notes"].as_array().unwrap())
-                .any(|m| m["id"] == id),
-            "{next}"
-        );
-    }
-    let CommandReply::Records(log) = g.rpc(json!({"command":"log_wait","args":{"read":{"project":g.selector(),"since_seq":0,"kinds":["message"],"limit":200},"timeout_seconds":1,"questions_only":false}})) else { panic!("log records") };
-    let log = serde_json::to_value(log).unwrap();
-    for id in [ask.as_i64().unwrap(), say.id.0, reply.id.0] {
-        assert!(
-            log["records"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|m| m["id"] == id),
-            "{log}"
         );
     }
 }

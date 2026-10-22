@@ -4,12 +4,10 @@
 //! one that would not start; the step's head offers Cancel and Cancel and dismiss, whose forms
 //! post in place, and the plan then offers its Undo.
 use crate::board_fixture;
-use crate::chrome;
 use crate::plan_html;
 use crate::seed;
 use axum::{Extension, Router, http::StatusCode};
 use board_fixture::Fixture;
-use chrome::Chrome;
 use serde_json::json;
 use sluice_model::{
     commands::{NeedsDismiss, StepCancel, StepDismiss, StepSelection},
@@ -50,6 +48,7 @@ fn exited() -> PublicError {
 const PLAN: &str = r#"{"steps":{
     "rep":{"run":"custom.open","doc":"Repeats its failure"},
     "first":{"run":"custom.open","doc":"Fails once"},
+    "different":{"run":"custom.open","doc":"Fails differently"},
     "exited":{"run":"custom.open","doc":"Its engine exits"},
     "cxl":{"run":"custom.open","doc":"Cancelled while it ran"},
     "after":{"run":"custom.open","doc":"Comes after the first","after":["first"]}}}"#;
@@ -66,6 +65,7 @@ async fn advice(f: &Fixture) -> ProjectId {
             &[
                 ("rep", "failed"),
                 ("first", "failed"),
+                ("different", "failed"),
                 ("exited", "failed"),
                 ("cxl", "failed"),
             ],
@@ -74,6 +74,16 @@ async fn advice(f: &Fixture) -> ProjectId {
     let runs: Vec<(&str, &str, PublicError)> = vec![
         ("rep", "2026-10-01T00:00:00Z", fn_failure("boom: the same")),
         ("rep", "2026-10-01T00:10:00Z", fn_failure("boom: the same")),
+        (
+            "different",
+            "2026-10-01T00:00:00Z",
+            fn_failure("first failure"),
+        ),
+        (
+            "different",
+            "2026-10-01T00:10:00Z",
+            fn_failure("different failure"),
+        ),
         (
             "first",
             "2026-10-01T00:00:00Z",
@@ -142,58 +152,6 @@ fn page_advice(page: &str) -> String {
         .nth(1)
         .map(|rest| rest[..rest.find("</p>").unwrap()].to_owned())
         .unwrap_or_default()
-}
-
-#[tokio::test]
-async fn the_plan_card_and_the_step_page_give_one_retry_advice() {
-    let f = Fixture::new().await;
-    let id = advice(&f).await;
-    let (status, plan) = f.get(&format!("/projects/id/{id}")).await;
-    assert_eq!(status, StatusCode::OK, "{plan}");
-    let mut said = vec![];
-    for step in ["rep", "first", "exited", "cxl"] {
-        let card = plan_html::stopped(&plan, step);
-        let (_, page) = f.get(&format!("/projects/id/{id}/steps/{step}")).await;
-        let (on_card, on_page) = (card_advice(card), page_advice(&page));
-        assert_eq!(on_card, on_page, "{step}: the card and the page disagree");
-        said.push(on_card);
-        let band = between(&page, "<header id=\"step-band\"", "</header>");
-        if step == "rep" {
-            // a repeated failure: Retry with feedback leads on both (the plan's open in place
-            // under it), with no bare Retry on the plan; the page's Retry outlined beside it
-            assert!(
-                card.contains("data-fb aria-expanded=\"true\"")
-                    && card.contains("class=\"answer-in fb open\"")
-                    && card.contains("name=\"message\"")
-                    && !card.contains("id=\"retry-rep\""),
-                "{card}"
-            );
-            assert!(
-                band.contains("<a class=\"btn primary\" href=\"#why-feedback\">Retry with feedback</a><button name=\"action\" value=\"retry\">Retry</button>"),
-                "{band}"
-            );
-            assert!(page.contains("id=\"why-feedback\""), "{page}");
-        } else {
-            assert!(!card.contains(">Retry with feedback</a>"), "{step}: {card}");
-            assert!(!band.contains("#why-feedback"), "{step}: {band}");
-        }
-    }
-    assert_eq!(
-        said,
-        [
-            "Run 1 failed the same way. Retry with feedback, or change its inputs.",
-            // a lost process: Retry is the whole move, so no advice repeats it
-            "",
-            "If it refused or hit a limit, Retry with feedback; if it crashed, Retry.",
-            "",
-        ]
-    );
-    // the engine that exited is not one that would not start
-    let card = plan_html::stopped(&plan, "exited");
-    assert!(
-        card.contains("Its engine exited after 4m.") && !card.contains("would not start"),
-        "{card}"
-    );
 }
 
 /// Cancel, Dismiss and Undismiss, and setting items of Needs you aside, as the coordinator
@@ -314,6 +272,27 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     let router = router(&f);
     let (_, plan) = f.get(&format!("/projects/id/{id}")).await;
     let plan_href = format!("/projects/id/{id}");
+
+    // Read the last TWO failures: repeating one run would mistake different failures for a repeat.
+    for (step, expected) in [
+        (
+            "rep",
+            "Run 1 failed the same way. Retry with feedback, or change its inputs.",
+        ),
+        ("different", ""),
+        ("first", ""),
+        (
+            "exited",
+            "If it refused or hit a limit, Retry with feedback; if it crashed, Retry.",
+        ),
+        ("cxl", ""),
+    ] {
+        let card = plan_html::stopped(&plan, step);
+        assert_eq!(card_advice(card), expected, "{step}: {card}");
+        let (_, page) = f.get(&format!("{plan_href}/steps/{step}")).await;
+        assert_eq!(page_advice(&page), expected, "{step}: {page}");
+    }
+
     // the step's head offers Cancel and Cancel and dismiss, each acting immediately
     let (_, page) = f.get(&format!("{plan_href}/steps/first")).await;
     let acts = between(&page, "<header id=\"step-band\"", "</header>").to_owned();
@@ -416,42 +395,4 @@ async fn a_failed_card_offers_cancel_and_cancel_and_dismiss_and_undo_brings_back
     )
     .await;
     assert!(said.starts_with("Nothing was done"), "{said}");
-}
-
-async fn serve(router: Router) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move {
-        axum::serve(listener, router).await.unwrap();
-    });
-    (addr, server)
-}
-
-/// The × on a stop in Needs you, in Chromium: posted in place (no navigation, no scroll jump),
-/// the item gives way to its Set aside line and Undo takes the focus; Undo brings it back.
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_dismiss_a_stop_in_place_with_the_focus_on_undo() {
-    let f = Fixture::new().await;
-    let id = advice(&f).await;
-    let (addr, server) = serve(router(&f)).await;
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}")).unwrap();
-        for (width, step) in [(1440, "first"), (390, "exited")] {
-            browser.viewport(width, "light").unwrap();
-            browser.wait(&format!("document.querySelector('#n-stop-{step} button.x')?.checkVisibility()")).unwrap();
-            browser.eval("window.marker = 'same document'; window.navigations = performance.getEntriesByType('navigation').length").unwrap();
-            browser.eval(&format!("document.querySelector('#n-stop-{step} button.x').click()")).unwrap();
-            browser.wait(&format!("document.activeElement?.id === 'undo-n-stop-{step}' && !document.querySelector('#n-stop-{step}')")).unwrap();
-            assert_eq!(
-                browser.eval("[window.marker, performance.getEntriesByType('navigation').length === window.navigations, document.documentElement.scrollWidth <= innerWidth]").unwrap(),
-                json!(["same document", true, true])
-            );
-            browser.eval(&format!("document.querySelector('#undo-n-stop-{step}').click()")).unwrap();
-            browser.wait(&format!("document.activeElement?.id === 'n-stop-{step}'")).unwrap();
-        }
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
 }

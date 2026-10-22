@@ -2012,10 +2012,6 @@ async fn queued_messages_wait_for_work_and_never_replay_unknown_input() {
 #[tokio::test]
 async fn devin_exit_probe_drains_terminal_hooks_before_reporting_exit() {
     exit_probe(false).await;
-}
-
-#[tokio::test]
-async fn terminal_hooks_after_probe_client_exit_still_acknowledge_the_task() {
     exit_probe(true).await;
 }
 

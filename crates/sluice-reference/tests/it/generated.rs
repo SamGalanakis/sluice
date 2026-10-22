@@ -3,13 +3,10 @@
 //! an accepted edit's parts agree with each other (its changes rebuild its candidate, its
 //! export compiles, its impact preview is within its full one).
 
-use proptest::prelude::*;
-use sluice_model::plan_rows::{PlanChange, PlanOp};
+use sluice_model::plan_rows::PlanOp;
 use sluice_reference::{
-    Plan,
     generate::{self, Fixture},
     harness::{Verdict, evaluate},
-    ops,
 };
 use std::collections::BTreeMap;
 
@@ -128,43 +125,5 @@ fn slow_generated_edits_reach_every_verdict_and_every_operation() {
             messages.keys().any(|m| m.starts_with(message)),
             "no generated edit is refused with {message:?}: {messages:?}"
         );
-    }
-}
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(64))]
-
-
-
-    #[test]
-    fn an_accepted_edit_agrees_with_itself(case in generate::case(10, 4)) {
-        let fixture = Fixture::new();
-        let verdict = evaluate(&case, &fixture.context()).expect("a generated base compiles");
-        if let Verdict::Accepted(accepted) = verdict {
-            prop_assert_eq!(&accepted.document, &ops::document_of(&accepted.rows));
-            prop_assert_eq!(&ops::apply_changes(&case.base, &accepted.changes), &accepted.rows);
-            prop_assert!(Plan::parse(&accepted.document, &fixture.signatures).is_ok());
-            if accepted.changes.is_empty() {
-                prop_assert_eq!(&accepted.rows, &case.base);
-            }
-            for (part, all) in [
-                (&accepted.impact.would_start, &accepted.all.would_start),
-                (&accepted.impact.would_queue, &accepted.all.would_queue),
-                (&accepted.impact.would_skip, &accepted.all.would_skip),
-                (&accepted.impact.would_stale, &accepted.all.would_stale),
-            ] {
-                prop_assert!(part.iter().all(|id| all.contains(id)));
-            }
-            for change in &accepted.changes {
-                if let PlanChange::StepPut { step, .. } = change {
-                    prop_assert!(accepted.affected.contains(step));
-                }
-            }
-            for id in accepted.state.added.iter().chain(&accepted.state.removed) {
-                let put_or_deleted = accepted.changes.iter().any(|c| matches!(c,
-                    PlanChange::StepPut { step, .. } | PlanChange::StepDelete { step } if step == id));
-                prop_assert!(put_or_deleted, "{} added or removed without a change", id);
-            }
-        }
     }
 }

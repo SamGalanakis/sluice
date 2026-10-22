@@ -57,23 +57,6 @@ async fn ask(
     .0
 }
 
-/// The owner's answer to `question`, sent now to `to` on its thread.
-async fn answer(f: &Fixture, project: ProjectId, question: i64, to: &'static str) {
-    stored(
-        &f.writer,
-        project,
-        Stored {
-            thread: &format!("step-{to}"),
-            from: "owner",
-            to: Some(to),
-            body: "Land it now.",
-            reply: Some(sluice_model::ids::MessageId(question)),
-            ..Default::default()
-        },
-    )
-    .await;
-}
-
 /// One run of `step` from `started`, ended `finished` with `result` (both none while it runs).
 async fn run(
     f: &Fixture,
@@ -266,67 +249,6 @@ async fn a_steps_overview_draws_its_open_question_whole_to_answer_and_its_header
     }
     assert_eq!(page.matches(&format!("id=\"message-{q}\"")).count(), 1);
     assert_eq!(page.matches(&format!("id=\"ov-message-{q}\"")).count(), 1);
-}
-
-#[tokio::test]
-async fn an_answer_is_confirmed_in_its_place() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    let answered = ask(&f, id, "l1-work", "Land l1 first?", "Yes or no.").await;
-    let waiting = ask(
-        &f,
-        id,
-        "orchestrator",
-        "Accept revision 3?",
-        "It drops `span`.",
-    )
-    .await;
-    answer(&f, id, answered, "l1-work").await;
-    let (_, inbox) = f.get("/inbox").await;
-    // the answered question keeps its place as one line; the open one is still a card
-    let line = between(
-        &inbox,
-        &format!("<article class=\"q-card q-done\" id=\"item-{id}-{answered}\""),
-        "</article>",
-    );
-    assert!(
-        line.contains("<span class=\"qa-what\">Answered <time"),
-        "{line}"
-    );
-    assert!(
-        line.contains("<span class=\"qa-title\">Land l1 first?</span>"),
-        "{line}"
-    );
-    assert!(
-        line.contains("sent to <span class=\"who who-step\">"),
-        "{line}"
-    );
-    assert!(
-        line.contains(&format!(
-            "thread?thread=step-l1-work#message-{answered}\">Read the thread</a>"
-        )),
-        "{line}"
-    );
-    assert!(inbox.contains(&format!(
-        "<article class=\"q-card\" id=\"item-{id}-{waiting}\""
-    )));
-    // the count says what waits, the answered one not among them
-    assert!(
-        inbox.contains("<title>1 question · Inbox · sluice</title>"),
-        "{inbox}"
-    );
-    // the card names its project, not its thread's internal name, and leads to its thread
-    let card = between(&inbox, &format!("id=\"item-{id}-{waiting}\""), "</article>");
-    assert!(
-        card.contains("<span class=\"q-from\">titled · from "),
-        "{card}"
-    );
-    assert!(
-        card.contains(&format!(
-            "<a href=\"/projects/id/{id}/thread?thread=owner\">Open its thread</a>"
-        )),
-        "{card}"
-    );
 }
 
 #[tokio::test]

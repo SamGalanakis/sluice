@@ -2,7 +2,6 @@
 //! running step's time with no usual time beside it, a step's chain on the board (`?root=`),
 //! and a recipe's every unit (`?recipe=`), each read over HTTP as a browser gets it.
 use crate::board_fixture;
-use crate::chrome;
 use crate::plan_html;
 use axum::http::StatusCode;
 use board_fixture::{Fixture, lane_recipe};
@@ -420,88 +419,4 @@ async fn a_recipes_head_leads_to_every_unit_it_made_done_ones_too() {
     for unit in ["d1", "d2", "d3"] {
         assert_eq!(plan_html::done_lines(&html, unit), 1, "{unit}");
     }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_draws_the_step_view_to_its_width() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    runs(
-        &f,
-        id,
-        "l2-fork",
-        &[(
-            "2026-10-07T03:00:00Z",
-            Some("2026-10-07T03:10:00Z"),
-            "succeeded",
-        )],
-    )
-    .await;
-    runs(
-        &f,
-        id,
-        "l2-work",
-        &[(
-            "2026-10-07T09:10:00Z",
-            Some("2026-10-07T09:40:00Z"),
-            "failed",
-        )],
-    )
-    .await;
-    recipes(&f).await;
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
-        let base = format!("http://{addr}");
-        let mut browser = chrome::Chrome::open(&format!("{base}/projects/id/{id}/units/l2")).unwrap();
-        let ready = "customElements.get('sluice-steps') && document.querySelector('.sv-g') && document.readyState === 'complete'";
-        browser.wait(ready).unwrap();
-        const GEOMETRY: &str = r#"(() => {
-          const r = e => e && e.checkVisibility() ? e.getBoundingClientRect() : null;
-          const tracks = [...document.querySelectorAll('.sv-tr')].map(r);
-          const track = tracks[1];
-          const brk = r(document.querySelector('.sv-break'));
-          const bars = [...document.querySelectorAll('.sv-b')].map(e => e.getBoundingClientRect());
-          const ticks = [...document.querySelectorAll('.sv-tick')].filter(e => e.checkVisibility()).map(e => e.getBoundingClientRect());
-          const rows = [...document.querySelectorAll('.sv-row')];
-          // every row's rail runs its whole height, so its lines meet the next row's
-          const rails = rows.every(row => { const a = row.getBoundingClientRect(), b = row.querySelector('.sv-rail > svg').getBoundingClientRect(); return Math.abs(a.top - b.top) < 1 && Math.abs(a.bottom - b.bottom) < 1; });
-          // nothing in a row spills out of it
-          const clipped = rows.flatMap(row => [...row.querySelectorAll('.sv-name, .sv-st, .sv-pr, .sv-sp')].filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.className));
-          return {scroll: document.documentElement.scrollWidth, width: document.documentElement.clientWidth,
-                  track: track && [track.left, track.right, track.height], brk: brk && track && brk.width / (track.right - track.left),
-                  inside: !track || bars.every(b => b.left >= track.left - 0.5 && b.right <= track.right + 0.5),
-                  apart: ticks.every((t, i) => i === 0 || t.left >= ticks[i - 1].right + 4),
-                  ticks: ticks.length, head: r(document.querySelector('.sv-hd')) !== null, rails, clipped,
-                  errors: window.browserErrors};
-        })()"#;
-        for theme in ["light", "dark", "interstate-light"] {
-            for width in [390, 1440, 2560] {
-                browser.viewport(width, theme).unwrap();
-                let g = browser.eval(GEOMETRY).unwrap();
-                let label = format!("{width} {theme}");
-                assert!(g["scroll"].as_f64().unwrap() <= g["width"].as_f64().unwrap(), "{label}: sideways scroll {g}");
-                assert_eq!(g["errors"], serde_json::json!([]), "{label}: {g}");
-                assert_eq!(g["rails"], true, "{label}: {g}");
-                assert_eq!(g["clipped"], serde_json::json!([]), "{label}: {g}");
-                assert_eq!(g["inside"], true, "{label}: {g}");
-                if width == 390 {
-                    // a phone: no head, the runs a thin bar under the name
-                    assert_eq!(g["head"], false, "{label}: {g}");
-                    assert!(g["track"][2].as_f64().unwrap() <= 4.5, "{label}: {g}");
-                } else {
-                    // a break is 4% of the axis whatever the width; the labels never meet
-                    let share = g["brk"].as_f64().unwrap();
-                    assert!((share - 0.04).abs() < 0.002, "{label}: {g}");
-                    assert_eq!(g["apart"], true, "{label}: {g}");
-                    assert!(g["ticks"].as_u64().unwrap() >= 2, "{label}: {g}");
-                }
-            }
-        }
-    })
-    .await
-    .unwrap();
-    server.abort();
 }

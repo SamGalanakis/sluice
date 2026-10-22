@@ -730,6 +730,12 @@ async fn a_refused_action_is_said_in_its_form_and_one_after_an_unrelated_edit_ap
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::CONFLICT);
+    assert!(
+        response.headers()["content-type"]
+            .to_str()
+            .unwrap()
+            .starts_with("application/json")
+    );
     let json: serde_json::Value =
         serde_json::from_str(&super::forms::text(response).await).unwrap();
     assert_eq!(json["error"], "conflict", "{json}");

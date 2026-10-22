@@ -2,14 +2,10 @@ mod support;
 
 #[path = "it/boundaries.rs"]
 mod boundaries;
-#[path = "it/command_plan_rows.rs"]
-mod command_plan_rows;
 #[path = "it/contracts.rs"]
 mod contracts;
 #[path = "it/hash.rs"]
 mod hash;
-#[path = "it/identity.rs"]
-mod identity;
 #[path = "it/incremental.rs"]
 mod incremental;
 #[path = "it/limits.rs"]

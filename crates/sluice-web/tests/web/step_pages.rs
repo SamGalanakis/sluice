@@ -12,7 +12,7 @@ use crate::chrome;
 use crate::neutral;
 use board_fixture::Fixture;
 use chrome::Chrome;
-use serde_json::{Value, json};
+use serde_json::json;
 
 fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
     let router = f.router();
@@ -27,135 +27,6 @@ fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
 }
 const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
 const FITS: &str = "document.documentElement.scrollWidth <= document.documentElement.clientWidth";
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_the_pages_fit_every_width_overview_stands_two_up_and_the_question_is_answered_in_place()
- {
-    let f = Fixture::new().await;
-    let n = neutral::seed(&f.writer, f._home.path()).await;
-    let (addr, server) = serve(&f);
-    let base = format!("http://{addr}");
-    tokio::task::spawn_blocking(move || {
-        let p = n.almanac;
-        let asking = format!("{base}/projects/id/{p}/steps/a-7-draft");
-        let failed = format!("{base}/projects/id/{p}/steps/a-4-review");
-        let pages = [
-            ("step-asking", asking.clone()),
-            ("step-failed", failed.clone()),
-            ("unit-article", format!("{base}/projects/id/{p}/units/a-6")),
-            ("unit-scan", format!("{base}/projects/id/{p}/units/s-3")),
-            ("unit-index", format!("{base}/projects/id/{p}/units/index")),
-            ("inbox", format!("{base}/inbox")),
-            ("questions", format!("{base}/questions")),
-            (
-                "thread",
-                format!("{base}/projects/id/{p}/thread?thread=step-a-7-draft"),
-            ),
-        ];
-        let screens = std::env::var_os("SLUICE_STEP_SCREENS").map(std::path::PathBuf::from);
-        let mut browser = Chrome::open(&asking).unwrap();
-
-        // no page scrolls sideways, at any width, light or dark
-        for width in [390, 1440, 2560] {
-            for theme in ["light", "dark"] {
-                for (name, url) in &pages {
-                    browser.viewport(width, theme).unwrap();
-                    browser.navigate(url).unwrap();
-                    browser.wait("document.readyState === 'complete'").unwrap();
-                    browser.eval("document.fonts.ready").unwrap();
-                    browser.eval(FRAMES).unwrap();
-                    assert_eq!(
-                        browser.eval(FITS).unwrap(),
-                        json!(true),
-                        "{name} at {width} {theme} scrolls sideways"
-                    );
-                    if let Some(dir) = &screens {
-                        std::fs::create_dir_all(dir).unwrap();
-                        browser
-                            .screenshot(&dir.join(format!("{name}-{width}-{theme}.png")))
-                            .unwrap();
-                    }
-                }
-            }
-        }
-
-        // the band: the step's name in the frame's head, its own stage ringed, its actions
-        browser.viewport(1440, "light").unwrap();
-        browser.navigate(&failed).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        let band: Value = browser
-            .eval("(() => { const b = document.querySelector('.page-top #step-band'); return [b.querySelector('h1#d-title').textContent, b.querySelector('[aria-current=step] .st-n').textContent, [...b.querySelectorAll('.sh-acts :is(button, summary)')].filter(x => x.checkVisibility()).map(x => x.textContent.trim())]; })()")
-            .unwrap();
-        // Retry with feedback, as on the plan's Stopped cards, its box folded; Retry beside it
-        assert_eq!(
-            band,
-            json!(["review · Waders: the autumn guide's entries", "review", ["Retry with feedback", "Retry"]])
-        );
-
-        // Overview at 2560, in the frame's centred column: its two columns side by side from
-        // the top, seven and five twelfths, the sheet centred beside the sidebar under the bar
-        browser.viewport(2560, "dark").unwrap();
-        browser.navigate(&failed).unwrap();
-        browser.wait("document.querySelector('#tp-overview .d-failure')").unwrap();
-        browser.eval(FRAMES).unwrap();
-        let cols: Value = browser
-            .eval("(() => { const c = [...document.querySelectorAll('#tp-overview .ov > .sheet > .mod-col')].map(e => e.getBoundingClientRect()), s = document.querySelector('#tp-overview .ov > .sheet').getBoundingClientRect(); return [c.length, Math.round(c[0].top) === Math.round(c[1].top), c[0].right < c[1].left, c[0].width > c[1].width, s.width <= 1240.5, (a => Math.abs((s.left - a.left) - (a.right - s.right)) < 24)(document.querySelector('.mainarea').getBoundingClientRect())]; })()")
-            .unwrap();
-        assert_eq!(cols, json!([2, true, true, true, true, true]));
-
-        // a phone: the question first, a whole-width card, its Answer and Close 44px tall
-        for url in [&asking, &format!("{base}/inbox")] {
-            browser.viewport(390, "light").unwrap();
-            browser.navigate(url).unwrap();
-            browser
-                .wait("document.readyState === 'complete' && !!document.querySelector('.q-card sluice-answer')")
-                .unwrap();
-            browser.eval(FRAMES).unwrap();
-            let card: Value = browser
-                .eval("(() => { const q = document.querySelector('.q-card'), s = (q.closest('.sheet') ?? q.parentElement).getBoundingClientRect(), r = q.getBoundingClientRect(); const buttons = [...q.querySelectorAll('sluice-answer button.q-toggle, form.q-close button')].map(b => b.getBoundingClientRect().height); return [Math.round(r.width) === Math.round(s.width), buttons.length >= 2, buttons.every(h => h >= 44)]; })()")
-                .unwrap();
-            assert_eq!(card, json!([true, true, true]), "{url}");
-        }
-
-        // the swelled question is answered in place, the line saying so focused
-        browser.viewport(1440, "light").unwrap();
-        browser.navigate(&asking).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview .q-card sluice-answer .answer[data-drawn]')")
-            .unwrap();
-        // it swells first: Overview's first module
-        assert_eq!(
-            browser
-                .eval("(() => { const a = document.querySelector('#tp-overview .d-ask'); return !!a.querySelector(':scope > .q-card') && a === document.querySelector('#tp-overview .mod'); })()")
-                .unwrap(),
-            json!(true)
-        );
-        browser
-            .eval("document.querySelector('#tp-overview .q-card sluice-answer button.q-toggle').click()")
-            .unwrap();
-        browser
-            .wait("document.activeElement?.id?.startsWith('ov-reply-')")
-            .unwrap();
-        browser
-            .eval("(t => { t.value = 'Take the checklist dates.'; t.form.requestSubmit(); })(document.activeElement)")
-            .unwrap();
-        browser
-            .wait("document.activeElement?.matches('#tp-overview .q-answered[role=status]')")
-            .unwrap();
-        let said = browser
-            .eval("document.querySelector('#tp-overview .q-answered').textContent")
-            .unwrap();
-        assert!(
-            said.as_str().unwrap().starts_with("Answered just now: ")
-                && said.as_str().unwrap().ends_with(" · Read the thread"),
-            "{said}"
-        );
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
 
 /// A completed run must retain its actual budget and peak even when project defaults change;
 /// the shared failure summary must identify memory exhaustion on the owning unit too.

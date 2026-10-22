@@ -242,16 +242,8 @@ async fn a_claim_takes_an_unowned_or_silent_owners_unit_with_its_open_questions(
         f.message(took.notices[0]).await.to.as_deref(),
         Some("@gone")
     );
-}
 
-/// A reading owner's unit is a `conflict` naming the owner and its heartbeat, and nothing
-/// changes; `expected_owner` is a compare-and-set that takes it, and refuses when the owner is
-/// another; the person's unit needs `force`.
-#[tokio::test]
-async fn a_live_owner_is_taken_over_only_by_compare_and_set() {
-    let f = Fixture::new().await;
-    f.sql("UPDATE steps SET owner='@live' WHERE project_id=?1 AND unit='work'")
-        .await;
+    // The owner now reads: takeover needs compare-and-set; a person needs force.
     let refused = f
         .claim("@lead", &["work"], &[], None, false)
         .await

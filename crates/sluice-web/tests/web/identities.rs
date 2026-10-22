@@ -5,11 +5,9 @@
 //! address messages were stored under before sessions named themselves as stored,
 //! "orchestrator", muted, never "the orchestrator".
 use super::board_fixture;
-use super::stored_messages;
 use board_fixture::Fixture;
 use sluice_model::ids::{AttemptId, RunId};
 use sluice_store::RetrySafety;
-use stored_messages::{Stored, stored};
 
 fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
     let start = html
@@ -140,108 +138,4 @@ async fn stops_say_their_owner_after_their_state_and_an_unowned_one_says_nothing
         owned.contains("<span class=\"nd-who\">· <span class=\"own\">@lash-f4</span> · "),
         "the stop's line: {owned}"
     );
-}
-
-#[tokio::test]
-async fn messages_name_their_identities_and_the_old_shared_address_stays_as_stored_and_muted() {
-    let f = Fixture::new().await;
-    let id = f.id;
-    for m in [
-        Stored {
-            thread: "step-alpha-build",
-            from: "orchestrator",
-            to: Some("alpha-build"),
-            body: "Use the new dates.",
-            ..Default::default()
-        },
-        Stored {
-            thread: "step-alpha-build",
-            from: "alpha-build",
-            to: Some("orchestrator"),
-            body: "Noted.",
-            ..Default::default()
-        },
-        Stored {
-            thread: "owner",
-            from: "orchestrator",
-            to: Some("owner"),
-            body: "Keep the old maps?",
-            title: Some("Keep the old maps?"),
-            question: true,
-            ..Default::default()
-        },
-        Stored {
-            thread: "@lash-f4",
-            from: "@lash-f4",
-            to: Some("owner"),
-            body: "Drafts are in.",
-            ..Default::default()
-        },
-        Stored {
-            thread: "step-alpha-review",
-            from: "@lash-f4",
-            to: Some("alpha-review"),
-            body: "Check the dates first.",
-            ..Default::default()
-        },
-    ] {
-        stored(&f.writer, id, m).await;
-    }
-    let old = "<span class=\"who who-old\">orchestrator</span>";
-    let thread = |t: &str| format!("/projects/id/{id}/thread?thread={}", t.replace('@', "%40"));
-    let never = |html: &str| {
-        assert!(!html.contains("the orchestrator"), "{html}");
-        assert!(!html.contains("The orchestrator"), "{html}");
-        assert!(!html.contains(">Orchestrator<"), "{html}");
-    };
-
-    let (_, page) = f.get(&thread("step-alpha-build")).await;
-    assert_eq!(page.matches(old).count(), 2, "sender and recipient: {page}");
-    never(&page);
-
-    let (_, page) = f.get(&thread("@lash-f4")).await;
-    assert!(page.contains("You and @lash-f4"), "{page}");
-    assert!(
-        page.contains("<span class=\"who\">@lash-f4</span>"),
-        "{page}"
-    );
-
-    let (_, page) = f.get(&thread("owner")).await;
-    assert!(
-        page.contains("You and <span class=\"who-old\">orchestrator</span>"),
-        "{page}"
-    );
-    never(&page);
-
-    let (_, page) = f.get(&thread("step-alpha-review")).await;
-    assert!(
-        page.contains("<span class=\"who\">@lash-f4</span>"),
-        "{page}"
-    );
-
-    // the question, as the plan, home and the inbox draw it
-    let plan = f.opened(&format!("/projects/id/{id}")).await;
-    assert!(
-        plan.contains("<span class=\"nd-who\">· <span class=\"who-old\">orchestrator</span> · "),
-        "{plan}"
-    );
-    never(&plan);
-    let (_, home) = f.get("/").await;
-    assert!(
-        home.contains("<span class=\"nd-s\">asks you</span> <span class=\"nd-who\">· ")
-            && home.contains(" · <span class=\"who who-old\">orchestrator</span> · <time"),
-        "{home}"
-    );
-    never(&home);
-    let (_, inbox) = f.get("/inbox").await;
-    assert!(inbox.contains(old), "{inbox}");
-    never(&inbox);
-
-    // the log names them alike
-    let (_, log) = f.get(&format!("/projects/id/{id}/log")).await;
-    assert!(
-        log.contains("<span class=\"who-old\">orchestrator</span>"),
-        "{log}"
-    );
-    never(&log);
 }

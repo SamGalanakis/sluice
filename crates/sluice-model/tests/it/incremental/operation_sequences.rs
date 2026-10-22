@@ -1,4 +1,4 @@
-//! The reference meaning of each operation, case by case: where a put adds a section, where a
+//! Authored sequences through production preparation and its reference: where a put adds a section, where a
 //! changed key goes, positions and net changes, refusals and their paths, unit targets,
 //! recipe expansion and `start: false`.
 
@@ -19,7 +19,9 @@ fn op_list(value: Value) -> Vec<PlanOp> {
 }
 /// Apply `ops` to `base` with `Open` signatures and the generated recipes.
 fn apply(base: Value, ops: Value, start: bool) -> Result<ops::Applied, Vec<String>> {
-    let case = EditCase::new(&map(base), op_list(ops)).unwrap();
+    let mut case = EditCase::new(&map(base), op_list(ops)).unwrap();
+    case.start = start;
+    compare(&case);
     ops::apply(&case.base, &case.ops, start, &generate::recipes(), &Open)
         .map_err(|e| e.iter().map(ToString::to_string).collect())
 }
@@ -27,8 +29,7 @@ fn exported(applied: &ops::Applied) -> String {
     serde_json::to_string(&ops::document_of(&applied.rows)).unwrap()
 }
 
-#[test]
-fn operation_sequences_preserve_rows_and_refusals() {
+pub(super) fn check() {
     {
         let applied = apply(
             json!({"steps": {}, "inputs": {"a": "int"}}),
@@ -94,6 +95,7 @@ fn operation_sequences_preserve_rows_and_refusals() {
             ])),
         )
         .unwrap();
+        compare(&case);
         let applied = ops::apply(&case.base, &case.ops, true, &IndexMap::new(), &Open).unwrap();
         assert_eq!(
             exported(&applied),
@@ -252,6 +254,7 @@ fn operation_sequences_preserve_rows_and_refusals() {
         )
         .unwrap();
         case.start = false;
+        compare(&case);
         let Verdict::Accepted(accepted) = evaluate(&case, &fixture.context()).unwrap() else {
             panic!("accepted");
         };
@@ -290,7 +293,7 @@ fn operation_sequences_preserve_rows_and_refusals() {
             }
         });
         let request: Value = serde_json::from_str(include_str!(
-            "../../../sluice-model/tests/fixtures/plan_rows/plan_edit.request.json"
+            "../../fixtures/plan_rows/plan_edit.request.json"
         ))
         .unwrap();
         let mut ops = op_list(request["ops"].clone());
@@ -300,6 +303,7 @@ fn operation_sequences_preserve_rows_and_refusals() {
             "in": {"spec": {"source": "work/text"}}}));
         }
         let case = EditCase::new(&map(base), ops).unwrap();
+        compare(&case);
         let Verdict::Accepted(accepted) = evaluate(&case, &fixture.context()).unwrap() else {
             panic!("accepted");
         };
@@ -339,6 +343,7 @@ fn operation_sequences_preserve_rows_and_refusals() {
             ])),
         )
         .unwrap();
+        compare(&case);
         let applied = ops::apply(&case.base, &case.ops, true, &IndexMap::new(), &Open).unwrap();
         assert_eq!(ops::changes(&case.base, &applied.rows), []);
         assert_eq!(exported(&applied), serde_json::to_string(&base).unwrap());
@@ -357,4 +362,24 @@ fn operation_sequences_preserve_rows_and_refusals() {
             assert_eq!(ops::changes(&base_rows, &applied.rows).len(), 1, "{key}");
         }
     }
+}
+
+/// Every authored sequence also exercises production preparation through the differential.
+fn compare(case: &EditCase) {
+    // Operation-only fixtures may omit steps; both compilers require the empty section.
+    let mut case = case.clone();
+    if !case.base.header.root_order.contains(&RootSection::Steps) {
+        case.base.header.root_order.push(RootSection::Steps);
+    }
+    let mut fixture = Fixture::new();
+    fixture.signatures.insert(
+        "x".into(),
+        sluice_reference::plan::FnSignature {
+            open: true,
+            ..Default::default()
+        },
+    );
+    let mut model = super::Model::new();
+    model.signatures = sluice_reference::interop::model_signatures(&fixture.signatures);
+    super::agree(case, &fixture, &model).unwrap();
 }

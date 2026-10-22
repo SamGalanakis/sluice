@@ -9,15 +9,10 @@
 use crate::board_fixture;
 use crate::chrome;
 use crate::plan_html;
-use crate::stored_messages;
 use board_fixture::Fixture;
 use chrome::Chrome;
 use serde_json::json;
-use sluice_model::{
-    commands::StepDismiss,
-    error::PublicError,
-    ids::{AttemptId, ProjectId, RunId},
-};
+use sluice_model::{commands::StepDismiss, error::PublicError, ids::ProjectId};
 use sluice_store::RetrySafety;
 
 fn between<'a>(html: &'a str, from: &str, to: &str) -> &'a str {
@@ -135,26 +130,6 @@ async fn a_cancel_the_owner_dismisses_stays_on_its_unit_but_no_longer_marks_its_
     assert!(title(&home).contains("1 cancelled"), "{}", title(&home));
 }
 
-/// One finished run of `step`, ended `at`.
-async fn ran(f: &Fixture, project: ProjectId, step: &'static str, at: &'static str) {
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            let (attempt, run) = (AttemptId::new(), RunId::new());
-            tx.sql().execute(
-                "INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,?3,1,1,'terminal','{}','hash',?4)",
-                (attempt.to_string(), project.to_string(), step, at),
-            )?;
-            tx.sql().execute(
-                "INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at,started_at,finished_at,result) VALUES (?1,?2,?3,?4,1,1,?5,?5,?5,'{\"status\":\"failed\"}')",
-                (run.to_string(), project.to_string(), attempt.to_string(), step, at),
-            )?;
-            tx.changed(Some(project), "status");
-            Ok(())
-        })
-        .await
-        .unwrap();
-}
-
 #[tokio::test]
 async fn clear_board_is_immediate_and_undo_restores_its_program() {
     let f = Fixture::new().await;
@@ -197,99 +172,6 @@ async fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()
         addr,
         tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }),
     )
-}
-/// Two frames after a short pause: a resize or a patch has been laid out and fitted.
-fn settle(browser: &mut Chrome) {
-    browser
-        .wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
-        .unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_step_opened_from_another_opens_on_its_overview() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    let (addr, server) = serve(&f).await;
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/projects/id/{id}#step:l1-work")).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .wait("document.querySelector('#drawer:not([hidden]) #step-detail[data-step=\"l1-work\"] [role=tab][data-tab=\"inputs\"]')")
-            .unwrap();
-        browser
-            .eval("document.querySelector('#drawer [role=tab][data-tab=\"inputs\"]').click()")
-            .unwrap();
-        browser
-            .wait("document.querySelector('#drawer [role=tab][aria-selected=true]')?.dataset.tab === 'inputs'")
-            .unwrap();
-        // another step from this one: its Overview
-        browser.eval("location.hash = '#step:l2-work'").unwrap();
-        browser
-            .wait("document.querySelector('#drawer #step-detail[data-step=\"l2-work\"] [role=tab][aria-selected=true]')")
-            .unwrap();
-        let g = browser
-            .eval("({tab: document.querySelector('#drawer [role=tab][aria-selected=true]').dataset.tab, query: location.search, errors: window.browserErrors})")
-            .unwrap();
-        assert_eq!(g["tab"], "overview", "{g}");
-        assert_eq!(g["query"], "", "{g}");
-        assert_eq!(g["errors"], json!([]), "{g}");
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_long_token_never_pushes_a_phones_page_sideways() {
-    let f = Fixture::new().await;
-    let token = "SessionObservationEventPayload::LanguageExecution(LanguageExecutionObservationWithAVeryLongName)";
-    let body = format!("Should {token} carry the settled time?");
-    for (to, question) in [
-        (Some("owner"), true),
-        (Some("beta-build"), true),
-        (Some("owner"), false),
-    ] {
-        stored_messages::stored(
-            &f.writer,
-            f.id,
-            stored_messages::Stored {
-                thread: "step-beta-build",
-                from: "beta-build",
-                to,
-                body: &body,
-                question,
-                ..Default::default()
-            },
-        )
-        .await;
-    }
-    let (addr, server) = serve(&f).await;
-    let id = f.id;
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/questions")).unwrap();
-        for path in [
-            "/questions".to_owned(),
-            "/inbox".to_owned(),
-            format!("/projects/id/{id}/questions"),
-            format!("/projects/id/{id}/thread?thread=step-beta-build"),
-        ] {
-            browser.navigate(&format!("http://{addr}{path}")).unwrap();
-            browser.wait("document.readyState === 'complete'").unwrap();
-            for theme in ["light", "dark"] {
-                browser.viewport(390, theme).unwrap();
-                settle(&mut browser);
-                let g = browser
-                    .eval("({scroll: document.documentElement.scrollWidth - document.documentElement.clientWidth, has: document.body.textContent.includes('LanguageExecutionObservationWithAVeryLongName'), errors: window.browserErrors})")
-                    .unwrap();
-                assert_eq!(g["has"], true, "{path}: {g}");
-                assert_eq!(g["scroll"], 0, "{path} {theme}: sideways {g}");
-                assert_eq!(g["errors"], json!([]), "{path}: {g}");
-            }
-        }
-    })
-    .await
-    .unwrap();
-    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -360,120 +242,4 @@ async fn slow_chromium_clear_board_acts_and_undo_restores() {
         assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
     }).await.unwrap();
     server.abort();
-}
-
-#[tokio::test]
-async fn composing_waits_and_previous_outputs() {
-    let f = Fixture::new().await;
-    {
-        let id = f.titled().await;
-        for thread in ["step-l2-work", "step-l1-work"] {
-            stored_messages::stored(
-                &f.writer,
-                id,
-                stored_messages::Stored {
-                    thread,
-                    from: "orchestrator",
-                    to: Some(&thread[5..]),
-                    body: "Rebase first.",
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-        let (_, failed) = f
-            .get(&format!("/projects/id/{id}/steps/l2-work?tab=thread"))
-            .await;
-        let composer = between(&failed, "class=\"composer thread-reply\"", "</form>");
-        assert!(
-        composer.contains("<p class=\"meta composer-note\" id=\"composer-note-l2-work\">Not running: it reads this only if it runs again.</p>"),
-        "{composer}"
-    );
-        assert!(
-            composer.contains("aria-describedby=\"composer-note-l2-work\""),
-            "{composer}"
-        );
-        let (_, thread) = f
-            .get(&format!("/projects/id/{id}/thread?thread=step-l2-work"))
-            .await;
-        assert!(
-            thread.contains("composer-note"),
-            "the thread's page says it too"
-        );
-        // the head says the step's title; its crumb leads back to the step, its id in Details
-        assert!(
-            thread.contains("<div class=\"ph-name\"><h1><span class=\"d-stage\">")
-                && thread.contains("/steps/l2-work\">FIG-2: Stop the parser leak</a></nav>")
-                && thread.contains("<dt>Step</dt>"),
-            "{thread}"
-        );
-        let (_, running) = f
-            .get(&format!("/projects/id/{id}/steps/l1-work?tab=thread"))
-            .await;
-        assert!(
-            !running.contains("composer-note"),
-            "a running step reads it now"
-        );
-    }
-    {
-        let id = f
-        .project(
-            "takes",
-            json!({"steps":{
-                "probe":{"run":"custom.open","doc":"Probes the parser under load","outputs":{"x":"string"}},
-                "reader":{"run":"custom.open","in":{"x":{"source":"probe/x"}}}}}),
-            &[("probe", "running")],
-        )
-        .await;
-        let (_, page) = f.get(&format!("/projects/id/{id}/steps/reader")).await;
-        let waits = between(&page, "<p class=\"gate wait-step\">", "</p>");
-        assert!(waits.contains(&format!("<a class=\"sref-a\" href=\"/projects/id/{id}/steps/probe\" title=\"Probes the parser under load\">")), "{waits}");
-        assert!(!waits.contains("sref-id"), "the title alone: {waits}");
-        assert!(
-            waits.ends_with(" <span class=\"meta\">(running)</span>"),
-            "{waits}"
-        );
-        assert!(
-            !page.contains("step probe is running"),
-            "said once, as a link"
-        );
-    }
-    {
-        let id = f
-            .project(
-                "again",
-                json!({"steps":{
-                "redo":{"run":"custom.open"},
-                "said":{"run":"custom.open","outputs":{"note":"string"}}}}),
-                &[("said", "succeeded")],
-            )
-            .await;
-        ran(&f, id, "redo", "2026-10-01T00:00:00Z").await;
-        f.writer
-            .write(RetrySafety::NonIdempotent, move |tx| {
-                tx.sql().execute(
-                "UPDATE steps SET outputs='{\"note\":\"\"}' WHERE project_id=?1 AND step_id='said'",
-                [id.to_string()],
-            )?;
-                tx.changed(Some(id), "status");
-                Ok(())
-            })
-            .await
-            .unwrap();
-        let (_, page) = f.get(&format!("/projects/id/{id}/steps/redo")).await;
-        let when = between(&page, "<p class=\"status-line\">", "</p>");
-        assert!(
-            when.contains("<span class=\"sl-p\">its last run ended <time")
-                && when.contains("</time></span><span class=\"sl-p\">after &lt;1s</span>"),
-            "{when}"
-        );
-        assert!(!page.contains(">Ended "), "{page}");
-        let (_, said) = f
-            .get(&format!("/projects/id/{id}/steps/said?tab=outputs"))
-            .await;
-        assert!(
-            said.contains("<dd class=\"f-v\"><span class=\"v quiet\">empty</span></dd>"),
-            "{said}"
-        );
-    }
 }

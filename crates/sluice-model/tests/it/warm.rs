@@ -34,7 +34,7 @@ fn base_document() -> serde_json::Value {
 }
 
 #[test]
-fn slow_warm_edits_compile_no_plan_whole() {
+fn warm_edits_compile_no_plan_whole() {
     if std::env::var_os("SLUICE_WARM_COST_CHILD").is_none() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([

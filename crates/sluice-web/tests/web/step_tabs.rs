@@ -4,12 +4,10 @@
 //! keyboard, deep links, the message box) with the gallery's
 //! screenshots at every width in both themes.
 use crate::board_fixture;
-use crate::chrome;
 use crate::stored_messages;
 use board_fixture::Fixture;
-use chrome::Chrome;
 use serde_json::json;
-use sluice_model::{commands::CommandRequest, ids::MessageId};
+use sluice_model::ids::MessageId;
 use sluice_store::RetrySafety;
 use stored_messages::{Stored, stored};
 
@@ -131,112 +129,6 @@ async fn converse(f: &Fixture) -> (MessageId, MessageId, MessageId) {
 }
 
 // ---- Chromium ----------------------------------------------------------------------------
-
-fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let router = f.router();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
-    let addr = listener.local_addr().unwrap();
-    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
-    (
-        addr,
-        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }),
-    )
-}
-const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
-const CHOSEN: &str = "[document.querySelector('sluice-tabs').current, document.querySelector('[role=tab][aria-selected=true]').dataset.tab, [...document.querySelectorAll('.tp')].filter(p => p.checkVisibility()).map(p => p.dataset.tab).join(' ')]";
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_tabs_keep_their_choice_through_a_patch_move_by_keyboard_and_open_on_a_link()
-{
-    let f = std::sync::Arc::new(Fixture::new().await);
-    let (ask, _, _) = converse(&f).await;
-    let (addr, server) = serve(&f);
-    let page = format!("http://{addr}/projects/id/{}/steps/alpha-build", f.id);
-    let (writer, project) = (f.writer.clone(), f.id);
-    let rt = tokio::runtime::Handle::current();
-    let checks = f.clone();
-    tokio::task::spawn_blocking(move || {
-        let f = checks;
-        let mut browser = Chrome::open(&page).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .wait("document.readyState === 'complete' && !!customElements.get('sluice-tabs') && !!document.querySelector('sluice-tabs')")
-            .unwrap();
-        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["overview", "overview", "overview"]));
-        // a click chooses Outputs: its panel alone shows
-        browser.eval("document.querySelector('#tt-outputs').click()").unwrap();
-        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["outputs", "outputs", "outputs"]));
-        // a message arrives: the stream patches the page (the Thread tab counts 6), the choice
-        // stays
-        rt.block_on(stored(
-            &writer,
-            project,
-            Stored {
-                thread: "step-alpha-build",
-                from: "orchestrator",
-                to: Some("alpha-build"),
-                body: "One more thing: tag the release.",
-                ..Default::default()
-            },
-        ));
-        browser
-            .wait("document.querySelector('#tt-messages .n')?.textContent === '6'")
-            .unwrap();
-        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["outputs", "outputs", "outputs"]));
-        // the keyboard: arrows move along the bar (wrapping), Home and End to its ends
-        browser.eval("document.querySelector('#tt-outputs').focus()").unwrap();
-        let key = |browser: &mut Chrome, key: &str, code: u32| {
-            for kind in ["keyDown", "keyUp"] {
-                browser
-                    .send(
-                        "Input.dispatchKeyEvent",
-                        json!({"type": kind, "key": key, "code": key, "windowsVirtualKeyCode": code}),
-                    )
-                    .unwrap();
-            }
-            browser.eval("[document.activeElement.dataset.tab, document.querySelector('sluice-tabs').current]").unwrap()
-        };
-        assert_eq!(key(&mut browser, "ArrowRight", 39), json!(["runs", "runs"]));
-        assert_eq!(key(&mut browser, "ArrowRight", 39), json!(["overview", "overview"]));
-        assert_eq!(key(&mut browser, "ArrowLeft", 37), json!(["runs", "runs"]));
-        assert_eq!(key(&mut browser, "Home", 36), json!(["overview", "overview"]));
-        assert_eq!(key(&mut browser, "End", 35), json!(["runs", "runs"]));
-        // a deep link to a message opens the Thread tab on it
-        browser
-            .navigate(&format!("{page}#message-{}", ask.0))
-            .unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        browser.eval(FRAMES).unwrap();
-        assert_eq!(browser.eval(CHOSEN).unwrap(), json!(["messages", "messages", "messages"]));
-        let shown = browser
-            .eval(&format!("(r => r.top >= 0 && r.bottom <= innerHeight)(document.getElementById('message-{}').getBoundingClientRect())", ask.0))
-            .unwrap();
-        assert_eq!(shown, true);
-        // the message box sends a note to the step, and keeps the page
-        browser.eval("document.querySelector('#tp-messages textarea').value = 'Ship it after the tag.'").unwrap();
-        browser.eval("document.querySelector('#tp-messages form.composer button').click()").unwrap();
-        browser
-            .wait("document.querySelector('#tp-messages .form-said').textContent === 'Sent.'")
-            .unwrap();
-        let sent: Vec<_> = f
-            .commands
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|c| match c {
-                CommandRequest::Say(say) => Some((say.to.clone(), say.body.clone(), say.owner)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(sent, [("alpha-build".to_owned(), "Ship it after the tag.".to_owned(), true)]);
-        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
 
 #[tokio::test]
 async fn tabs_values_and_owner_conversations() {

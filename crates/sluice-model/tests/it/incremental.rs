@@ -13,6 +13,9 @@
 //!   reaches, equal the ones rebuilt from the candidate; every other step's edges are as they
 //!   were.
 
+#[path = "incremental/operation_sequences.rs"]
+mod operation_sequences;
+
 use crate::support;
 
 use indexmap::IndexMap;
@@ -438,6 +441,7 @@ proptest! {
 /// compiles, and each edit is refused with exactly the case's errors.
 #[test]
 fn the_validation_counterexamples_are_refused_incrementally() {
+    operation_sequences::check();
     for case in sluice_reference::harness::differential_cases() {
         let edit = sluice_reference::harness::differential_edit(&case);
         let open = OpenModel;

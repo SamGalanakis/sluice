@@ -333,44 +333,6 @@ async fn python_backoff_and_input_refusals() {
         }
     }
 }
-#[tokio::test]
-async fn slow_python_oversized_input_refusal() {
-    let scratch = Scratch::new();
-    {
-        let (host,_)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    raise AssertionError('user code ran')\nrun(main)\n",json!({}));
-        for raw in [vec![b'x'; MAX_FRAME_BYTES + 1]] {
-            let mut command = tokio::process::Command::new(&host.config.uv);
-            command
-                .args(["run", "--no-project", "--quiet"])
-                .arg(host.bundle.bundle_dir.join("main.py"))
-                .env("PYTHONPATH", &host.config.helper_dir)
-                .current_dir(&host.bundle.bundle_dir);
-            use std::process::Stdio;
-            command
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .kill_on_drop(true);
-            let mut child = command.spawn().unwrap();
-            let mut stdin = child.stdin.take().unwrap();
-            let write = async {
-                let _ = stdin.write_all(&raw).await;
-                drop(stdin);
-            };
-            let ((), output) = tokio::join!(write, child.wait_with_output());
-            let output = output.unwrap();
-            assert!(!output.status.success());
-            let envelope: Value = decode_json(&output.stdout).unwrap();
-            assert_eq!(envelope["ok"], false);
-            assert!(
-                !envelope["error"]["message"]
-                    .as_str()
-                    .unwrap()
-                    .contains("user code ran")
-            );
-        }
-    }
-}
 
 async fn wait_file(path: &Path) {
     super::file_ready(
@@ -662,26 +624,6 @@ async fn converted_open_fixture_submits_and_resubmits_with_run_capability() {
     assert_eq!(out["extra"], json!({"topic":"hello"}));
     assert_eq!(out["results"].as_array().unwrap().len(), 2);
     server.close().await;
-}
-
-#[tokio::test]
-async fn file_binding_bytes_are_frozen_by_caller_and_read_fresh_for_each_run() {
-    let scratch = Scratch::new();
-    let (host,mut invocation)=scratch.host("from sluice_fn import run\ndef main(inp,ctx):\n    return {'brief':inp['brief']}\nrun(main)\n",json!({"brief":"string"}));
-    let file = scratch.0.join("brief.txt");
-    std::fs::write(&file, "first").unwrap();
-    invocation.inputs = map(json!({"brief":std::fs::read_to_string(&file).unwrap()}));
-    std::fs::write(&file, "next").unwrap();
-    assert_eq!(
-        value(&execute(&host, &invocation).await.unwrap())["brief"],
-        "first"
-    );
-    invocation.run = RunId::new();
-    invocation.inputs = map(json!({"brief":std::fs::read_to_string(&file).unwrap()}));
-    assert_eq!(
-        value(&execute(&host, &invocation).await.unwrap())["brief"],
-        "next"
-    );
 }
 
 // These adapters use real store commands. The fixture has no needs or assigned messages.

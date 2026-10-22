@@ -57,8 +57,8 @@ identical, and runs any newly selected slow group. Host prerequisites and the co
 gates are in
 [host-prerequisites.md](host-prerequisites.md).
 
-`tests/support/` holds the helpers shared by the integration tests (scratch homes, free ports, systemd unit names, the headless Chromium driver) and `tests/browser.py` the
-Python DevTools driver used for dashboard screenshots. `crates/sluice/src/bin/fixture.rs` builds
+`tests/support/` holds the helpers shared by the integration tests (scratch homes, free ports,
+systemd unit names and the headless Chromium driver used for dashboard screenshots). `crates/sluice/src/bin/fixture.rs` builds
 the `fixture` binary that stands in for engines and fns in tests, and
 `crates/sluice-web/examples/dashboard_fixture.rs` serves the dashboard over a seeded scratch
 home.

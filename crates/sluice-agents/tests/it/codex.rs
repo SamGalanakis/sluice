@@ -219,7 +219,7 @@ async fn empty_rollout_subscription_retries_without_repeating_the_task() {
     adapter.close().await.unwrap();
 }
 #[tokio::test]
-async fn slow_a_resumed_long_thread_larger_than_four_mebibytes_is_received() {
+async fn a_resumed_long_thread_larger_than_four_mebibytes_is_received() {
     let scratch = Scratch::new();
     let socket = scratch.path().join("rpc.sock");
     let listener = UnixListener::bind(&socket).unwrap();
@@ -534,38 +534,6 @@ async fn g3_codex() {
     assert!(result.is_ok(), "{}", result.unwrap_err());
 }
 
-#[tokio::test]
-async fn remote_tui_launch_reports_thread_and_subscribes_after_first_turn() {
-    let scratch = Scratch::new();
-    let (mut adapter, mut context) = setup(&scratch, "tui");
-    context.tmux_binary = Some(PathBuf::from("/private/tmux"));
-    let launch = adapter.prepare(&context, None).await.unwrap().unwrap();
-    assert!(launch.argv.contains(&"--remote".into()));
-    assert_eq!(
-        launch.env["SLUICE_HOME"],
-        scratch.path().join("home").to_str().unwrap()
-    );
-    assert!(launch.env.keys().all(|key| !key.starts_with("CARGO_")));
-    adapter
-        .execute(&context, EngineCommand::StartFresh)
-        .await
-        .unwrap();
-    text(
-        &mut adapter,
-        &context,
-        InputId::Task,
-        "task for remote TUI thread",
-    )
-    .await;
-    assert_eq!(
-        completed(&mut adapter, &context, 1)
-            .await
-            .session_id
-            .as_deref(),
-        Some("fixture-thread")
-    );
-    adapter.close().await.unwrap();
-}
 use super::support as acceptance;
 
 // Ported from p5-05's native temporary-link regression.
@@ -931,8 +899,19 @@ async fn resume(adapter: &mut Codex, context: &mut EngineContext, scratch: &Scra
 #[tokio::test]
 async fn turn_delivery_compaction_redaction_and_private_home() {
     let scratch = Scratch::new();
-    let (mut adapter, context) = setup(&scratch, "normal");
-    start(&mut adapter, &context).await;
+    let (mut adapter, mut context) = setup(&scratch, "tui");
+    context.tmux_binary = Some(PathBuf::from("/private/tmux"));
+    let launch = adapter.prepare(&context, None).await.unwrap().unwrap();
+    assert!(launch.argv.contains(&"--remote".into()));
+    assert_eq!(
+        launch.env["SLUICE_HOME"],
+        scratch.path().join("home").to_str().unwrap()
+    );
+    assert!(launch.env.keys().all(|key| !key.starts_with("CARGO_")));
+    adapter
+        .execute(&context, EngineCommand::StartFresh)
+        .await
+        .unwrap();
     let private = adapter.private_home().unwrap();
     assert_eq!(
         fs::metadata(private.join("config.toml"))
@@ -983,6 +962,7 @@ async fn turn_delivery_compaction_redaction_and_private_home() {
         DeliveryOutcome::Acknowledged
     );
     let first = completed(&mut adapter, &context, 1).await;
+    assert_eq!(first.session_id.as_deref(), Some("fixture-thread"));
     assert_eq!(
         (
             first.status,

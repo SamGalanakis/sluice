@@ -192,63 +192,6 @@ async fn slow_chromium_plan_and_drawer_action_forms_submit_in_place() {
     server.abort();
 }
 
-/// Every Details panel on the plan, a step, a unit, home and the inbox opens wholly inside
-/// the window, at a phone's width, a laptop's and a wide screen's (home draws none today; it
-/// is checked so one added there is held too).
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_every_details_panel_opens_inside_the_window_at_every_width() {
-    let f = Fixture::new().await;
-    let id = f.id;
-    stored(
-        &f.writer,
-        id,
-        Stored {
-            thread: "step-alpha-review",
-            from: "alpha-review",
-            to: Some("owner"),
-            body: "Which way?",
-            title: Some("Land the cron fix now?"),
-            question: true,
-            ..Default::default()
-        },
-    )
-    .await;
-    let (addr, server) = serve(f.router()).await;
-    tokio::task::spawn_blocking(move || {
-        let base = format!("http://{addr}");
-        let pages = [
-            format!("/projects/id/{id}"),
-            format!("/projects/id/{id}/steps/beta-build"),
-            format!("/projects/id/{id}/units/alpha"),
-            "/".to_owned(),
-            "/inbox".to_owned(),
-        ];
-        // each visible "⋯" in turn: open it, measure its panel against the window, close it
-        const OPEN_EACH: &str = "(async () => { const frame = () => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))); const out = []; const all = [...document.querySelectorAll('details.dm')].filter(d => d.querySelector(':scope > summary').checkVisibility()); for (const d of all) { const s = d.querySelector(':scope > summary'); s.scrollIntoView({block: 'center'}); s.click(); await frame(); const p = d.querySelector(':scope > .dm-p').getBoundingClientRect(), w = document.documentElement.clientWidth; if (!d.open || p.left < 0 || p.right > w + 0.5 || p.width === 0) out.push([s.getAttribute('aria-label'), Math.round(p.left), Math.round(p.right), w]); if (d.open) s.click(); await frame(); } return [all.length, out, document.documentElement.scrollWidth <= innerWidth]; })()";
-        let mut browser = Chrome::open(&format!("{base}{}", pages[0])).unwrap();
-        for width in [390, 1440, 2560] {
-            browser.viewport(width, "light").unwrap();
-            for page in &pages {
-                browser.navigate(&format!("{base}{page}")).unwrap();
-                browser.wait("document.readyState === 'complete'").unwrap();
-                browser.eval("document.fonts.ready").unwrap();
-                let got = browser.eval(OPEN_EACH).unwrap();
-                // home draws none of its own; every other page has some
-                assert!(
-                    page == "/" || got[0].as_u64().unwrap() > 0,
-                    "{page} at {width}: no Details drawn"
-                );
-                assert_eq!(got[1], json!([]), "{page} at {width}: {got}");
-                assert_eq!(got[2], json!(true), "{page} at {width} scrolls sideways");
-            }
-        }
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
-
 /// Who cancelled a run, and why, is kept on the run: once the log has trimmed the record
 /// that said it, its Runs still says "Cancelled after 1h 18m by you: switch to the new brief."
 #[tokio::test]

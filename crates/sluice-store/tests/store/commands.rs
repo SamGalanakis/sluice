@@ -467,7 +467,7 @@ async fn dismissal(f: &Fixture) -> bool {
 }
 
 #[tokio::test]
-async fn slow_legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
+async fn legacy_dismissal_is_rewritten_without_refreshing_undo_time() {
     let mut f =
         Fixture::new(json!({"steps":{"a":{"run":"core.external"},"b":{"run":"core.external"},"c":{"run":"core.external"},"d":{"run":"core.external"}}}))
             .await;

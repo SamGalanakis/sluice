@@ -5,7 +5,6 @@
 //! inbox says "usual". In Chromium the page never scrolls sideways at 390, 1440 and 2560, and
 //! its window switch works.
 use crate::board_fixture;
-use crate::chrome;
 use crate::neutral;
 use axum::{
     Router,
@@ -13,7 +12,6 @@ use axum::{
     http::{Request, StatusCode},
 };
 use board_fixture::Fixture;
-use chrome::Chrome;
 use serde_json::json;
 use sluice_model::{
     error::PublicError,
@@ -124,84 +122,6 @@ async fn run(
         })
         .await
         .unwrap();
-}
-
-async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    (
-        format!("http://{addr}"),
-        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }),
-    )
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_stats_fits_every_width_and_its_window_switch_works() {
-    let f = Fixture::new().await;
-    let n = neutral::seed(&f.writer, f._home.path()).await;
-    let (base, server) = serve(f.router()).await;
-    let shots = std::env::var_os("SLUICE_STATS_SCREENS").map(std::path::PathBuf::from);
-    tokio::task::spawn_blocking(move || {
-        let page = format!("{base}/projects/id/{}/stats", n.almanac);
-        let mut browser = Chrome::open(&page).unwrap();
-        for width in [390, 1440, 2560] {
-            for theme in ["light", "dark"] {
-                browser.viewport(width, theme).unwrap();
-                browser.navigate(&page).unwrap();
-                browser.wait("document.readyState === 'complete'").unwrap();
-                browser.viewport(width, theme).unwrap();
-                let fit = browser
-                    .eval("[document.documentElement.scrollWidth, innerWidth, [...document.querySelectorAll('.st-t, .st-slow, .st-spark')].every(e => e.getBoundingClientRect().right <= innerWidth + 0.5)]")
-                    .unwrap();
-                assert!(
-                    fit[0].as_f64() <= fit[1].as_f64() && fit[2] == json!(true),
-                    "{width} {theme}: {fit}"
-                );
-                // a stage's numbers sit in their labelled cells on a phone, in columns wider
-                let label = browser
-                    .eval("getComputedStyle(document.querySelector('.st-dur tbody .num'), '::before').content")
-                    .unwrap();
-                if width == 390 {
-                    assert_ne!(label, json!("none"), "{label}");
-                } else {
-                    assert_eq!(label, json!("none"), "{width}: {label}");
-                }
-                if let Some(dir) = &shots {
-                    browser
-                        .screenshot(&dir.join(format!("stats-fixture-{width}-{theme}.png")))
-                        .unwrap();
-                }
-            }
-        }
-        // the switch: a link a window, the chosen one filled; a click draws that window
-        browser.viewport(1440, "light").unwrap();
-        browser.navigate(&page).unwrap();
-        browser.wait("document.readyState === 'complete'").unwrap();
-        let chosen = "document.querySelector('nav.tabs[aria-label=\"Window\"] a[aria-current=\"page\"]')";
-        assert_eq!(browser.eval(&format!("{chosen}.textContent")).unwrap(), "7 days");
-        assert_ne!(
-            browser.eval(&format!("getComputedStyle({chosen}).backgroundColor")).unwrap(),
-            browser.eval("getComputedStyle(document.body).backgroundColor").unwrap()
-        );
-        browser
-            .eval("[...document.querySelectorAll('nav.tabs[aria-label=Window] a')].find(a => a.textContent === '24 hours').click()")
-            .unwrap();
-        browser
-            .wait(&format!("location.search === '?window=24h' && document.readyState === 'complete' && {chosen}?.textContent === '24 hours'"))
-            .unwrap();
-        let note = browser
-            .eval("document.querySelector('.page-line').textContent")
-            .unwrap();
-        // the reader's clock is its own; the counts are the window's
-        assert!(
-            note.as_str()
-                .is_some_and(|n| n.starts_with("16 runs ended and 5 units finished in the last 24 hours")),
-            "{note}"
-        );
-    })
-    .await
-    .unwrap();
-    server.abort();
 }
 
 #[tokio::test]

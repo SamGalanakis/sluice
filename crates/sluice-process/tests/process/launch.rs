@@ -441,7 +441,7 @@ fn process_identity_authority_and_unit_names_refuse_stale_or_foreign_owners() {
 // Regression: preflight used to consume start_once before any start was sent, so retry
 // could only reconcile a nonexistent unit and the run was later declared lost.
 #[tokio::test]
-async fn slow_preflight_timeout_does_not_consume_the_guardian_start() {
+async fn preflight_timeout_does_not_consume_the_guardian_start() {
     let mut guard = UnitGuard(TransientService::for_test(RunId::new()));
     let mut spec = ServiceCommand::new("/usr/bin/sleep");
     spec.args = vec!["60".into()];

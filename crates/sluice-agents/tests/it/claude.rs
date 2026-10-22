@@ -324,18 +324,6 @@ fn fake_claude(h: &Harness, name: &str, version: &str, help: &str) -> PathBuf {
     bin
 }
 #[tokio::test]
-async fn fake_transient_and_fatal_error_classification() {
-    let mut h = Harness::new(json!({"turns":[{"error":"API Error: 529 overloaded"}]})).await;
-    h.launch(None).await;
-    let s = h.turn(InputId::Task, "p", 1).await;
-    assert_eq!(s.error.unwrap().kind, EngineErrorKind::Transient);
-    h.cleanup().await;
-    assert_eq!(
-        sluice_agents::engines::claude::state::classify("Error: auth failed").kind,
-        EngineErrorKind::Fatal
-    );
-}
-#[tokio::test]
 async fn cancellation_reaps_private_server_engine_and_background_shell() {
     let mut h = Harness::new(json!({"turns":[{"reply":"building","background_s":60}]})).await;
     h.launch(None).await;

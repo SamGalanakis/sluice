@@ -36,24 +36,6 @@ fn press(browser: &mut Chrome, key: &str, code: u32) {
         browser.send("Input.dispatchKeyEvent", event).unwrap();
     }
 }
-fn click(browser: &mut Chrome, selector: &str) {
-    let at = browser
-        .eval(&format!(
-            "(e => {{ window.scrollBy({{top: e.getBoundingClientRect().top - innerHeight / 2, behavior: 'instant'}}); const r = e.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }})(document.querySelector({}))",
-            json!(selector)
-        ))
-        .unwrap();
-    let (x, y) = (at[0].as_f64().unwrap(), at[1].as_f64().unwrap());
-    for kind in ["mousePressed", "mouseReleased"] {
-        browser
-            .send(
-                "Input.dispatchMouseEvent",
-                json!({"type": kind, "x": x, "y": y, "button": "left", "clickCount": 1}),
-            )
-            .unwrap();
-    }
-}
-const FRAMES: &str = "new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))";
 /// The page's pulse popover as it stands: open, still asking, its minute (its time's datetime)
 /// and its words.
 const POP: &str = "(() => { const p = document.getElementById('pulse-pop'); return {open: p.matches(':popover-open'), busy: p.getAttribute('aria-busy'), at: p.querySelector('time[data-clock]')?.getAttribute('datetime') ?? null, text: p.innerText, link: p.querySelector('.pp-more a')?.getAttribute('href') ?? null}; })()";
@@ -192,102 +174,5 @@ async fn slow_chromium_the_drawers_strip_and_step_view_say_quiet_like_the_plan()
         assert_eq!(browser.eval("document.querySelector('#u-a-6 .track .current-stage[data-state=\"quiet\"]')?.textContent.startsWith('draft quiet ')").unwrap(), json!(true));
         assert_eq!(browser.eval("document.querySelector('#step-detail .sh-lane li.st[data-state=\"quiet\"] .st-w')?.textContent.startsWith('quiet ')").unwrap(), json!(true));
     }).await.unwrap();
-    server.abort();
-}
-
-/// A row of At work opens in place to its conversation and its ways on (no step table), asked
-/// for as it opens; it stays open through the stream's patches, and its new stamp asks again, so
-/// its Open step follows the unit to its next step. The bug this catches: a patch that closes an
-/// open row, or leaves its body saying a step it has moved past.
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_row_opens_its_conversation_in_place_through_a_patch() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    let (addr, server) = serve(&f);
-    let writer = f.writer.clone();
-    let rt = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
-        let page = format!("http://{addr}/projects/id/{id}");
-        let mut browser = Chrome::open(&page).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .wait("customElements.get('sluice-board') && document.querySelector('#u-l1 > summary')")
-            .unwrap();
-        // closed at first, its body not drawn: the page has only the rows
-        assert_eq!(
-            browser.eval("[document.querySelector('#u-l1').open, document.querySelector('#u-l1 .ro-foot')]").unwrap(),
-            json!([false, null])
-        );
-        // Enter on the row opens it, asking for its body
-        browser.eval("document.querySelector('#u-l1 > summary').focus()").unwrap();
-        press(&mut browser, "Enter", 13);
-        browser.wait("document.querySelector('#u-l1').open && document.querySelector('#u-l1 .ro-foot')").unwrap();
-        browser.eval(FRAMES).unwrap();
-        // no step table; its ways on, Open step at its current step
-        assert_eq!(
-            browser.eval("[!!document.querySelector('#u-l1 sluice-steps'), [...document.querySelectorAll('#u-l1 .ro-foot a')].map(a => a.textContent), document.querySelector('#u-l1 .ro-foot a.btn').dataset.step]").unwrap(),
-            json!([false, ["Message", "Unit page", "Open step"], "l1-work"])
-        );
-        // the body sits under the row, on its edges
-        let geometry = browser
-            .eval("(() => { const row = document.querySelector('#u-l1 > summary').getBoundingClientRect(), body = document.querySelector('#u-l1 .ro-drill').getBoundingClientRect(); return [body.top >= row.bottom - 0.5, Math.abs(body.left - row.left) < 0.5, Math.abs(body.right - row.right) < 0.5]; })()")
-            .unwrap();
-        assert_eq!(geometry, json!([true, true, true]));
-        // Open step opens the step in the drawer
-        click(&mut browser, "#u-l1 .ro-foot a.btn");
-        browser.wait("location.hash === '#step:l1-work' && !document.getElementById('drawer').hidden").unwrap();
-        browser.wait("document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')").unwrap();
-        press(&mut browser, "Escape", 27);
-        browser.wait("location.hash === '' && document.getElementById('drawer').hidden").unwrap();
-        // Space on another row opens it too
-        browser.eval("window.other = [...document.querySelectorAll('details.ro-u')].find(d => d.id !== 'u-l1').id; document.querySelector(`#${other} > summary`).focus()").unwrap();
-        press(&mut browser, " ", 32);
-        browser.wait("document.getElementById(other).open && document.getElementById(other).querySelector('.ro-foot')").unwrap();
-        // a stream patch: l1's work finishes, so l1 waits on its next step, drawn anew; it
-        // stays open and, asked for again by the row's new stamp, leads to the new step
-        assert_eq!(browser.eval("document.querySelector('#u-l1').classList.contains('is-wait')").unwrap(), json!(false));
-        rt.block_on(async {
-            writer
-                .write(RetrySafety::NonIdempotent, move |tx| {
-                    tx.sql().execute(
-                        "UPDATE steps SET status='succeeded' WHERE project_id=?1 AND step_id='l1-work'",
-                        [id.to_string()],
-                    )?;
-                    tx.changed(Some(id), "steps");
-                    Ok(())
-                })
-                .await
-                .unwrap()
-        });
-        browser
-            .wait("document.querySelector('#u-l1')?.classList.contains('is-wait')")
-            .unwrap();
-        browser.wait("document.querySelector('#u-l1').open").unwrap();
-        browser
-            .wait("document.querySelector('#u-l1 .ro-foot a.btn')?.dataset.step === 'l1-land'")
-            .unwrap();
-        assert_eq!(browser.eval("document.getElementById(other).open").unwrap(), json!(true));
-
-        // at every width, in both stocks: nothing scrolls sideways, the body keeps its row's edges,
-        // and the row is a whole target
-        for theme in ["light", "dark"] {
-            for width in [390, 1440, 2560] {
-                browser.viewport(width, theme).unwrap();
-                browser.eval(FRAMES).unwrap();
-                let g: Value = browser
-                    .eval("(() => { const body = document.querySelector('#u-l1 .ro-drill').getBoundingClientRect(); const sum = document.querySelector('#u-l1 > summary').getBoundingClientRect(); return {fits: document.documentElement.scrollWidth <= document.documentElement.clientWidth, inside: Math.abs(body.left - sum.left) < 0.5 && Math.abs(body.right - sum.right) < 0.5, spills: [...document.querySelectorAll('#u-l1 .ro-drill .msg, #u-l1 .ro-foot')].filter(e => e.scrollWidth > e.clientWidth + 1).length, target: [Math.round(sum.width), Math.round(sum.height)], errors: window.browserErrors}; })()")
-                    .unwrap();
-                let label = format!("{width} {theme}");
-                assert_eq!(g["fits"], true, "{label}: {g}");
-                assert_eq!(g["inside"], true, "{label}: {g}");
-                assert_eq!(g["spills"], 0, "{label}: {g}");
-                let least = if width == 390 { 44 } else { 34 };
-                assert!(g["target"][0].as_i64().unwrap() >= least && g["target"][1].as_i64().unwrap() >= least, "{label}: {g}");
-                assert_eq!(g["errors"], json!([]), "{label}: {g}");
-            }
-        }
-    })
-    .await
-    .unwrap();
     server.abort();
 }

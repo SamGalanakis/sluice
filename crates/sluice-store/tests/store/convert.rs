@@ -10,14 +10,14 @@ use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use sluice_model::{
     error::PublicError,
-    ids::{HomeId, ProjectId, RecordSeq, Revision},
+    ids::{HomeId, ProjectId, Revision},
     plan_index::{output_references, plan_edges, step_index},
     plan_rows::{HistoryEvent, InputRow, OutputRow, PlanChange, PlanHeader, PlanRows, StepRow},
     rpc::JsonMap,
 };
 use sluice_store::{
-    ReadPool, RetrySafety, StoreError, Writer, backup,
-    convert::{self, Anchor, AnchorSource, convert_home, schema_fingerprint},
+    ReadPool, RetrySafety, StoreError, Writer,
+    convert::{Anchor, AnchorSource, convert_home, schema_fingerprint},
     plans, projects,
 };
 use std::{
@@ -195,62 +195,6 @@ fn history() -> (Vec<Value>, Value) {
     (revisions, stored)
 }
 
-/// Runtime state the conversion keeps: a's result, a finished run and terminal attempts with
-/// completion snapshots (one whose declaration differs from its snapshot's), and records.
-fn runtime(c: &Connection, project: ProjectId) -> (String, String) {
-    let p = project.to_string();
-    let result = sluice_model::ids::ResultId::new().to_string();
-    c.execute(
-        "INSERT INTO step_results(result_id,project_id,step_id,generation,declaration,status,outputs,recorded_at) VALUES (?1,?2,'a',1,?3,'succeeded','{\"value\":\"x\"}','2026-10-01T00:00:00Z')",
-        params![result, p, a_v1().to_string()],
-    )
-    .unwrap();
-    c.execute(
-        "UPDATE steps SET status='succeeded',outputs='{\"value\":\"x\"}',result_id=?2 WHERE project_id=?1 AND step_id='a'",
-        params![p, result],
-    )
-    .unwrap();
-    let snapshot = |declaration: Value| {
-        json!({"runtime": {"capability": "cap", "execution": "exec", "completion": {
-            "revision": 3, "document": {"steps": {"a": declaration}}, "signatures": {}
-        }}, "files": {}})
-    };
-    let mut attempts = vec![];
-    for (n, snapshot) in [snapshot(a_v1()), snapshot(json!({"run": "other"}))]
-        .into_iter()
-        .enumerate()
-    {
-        let attempt = sluice_model::ids::AttemptId::new().to_string();
-        let request = json!({"declaration": a_v1(), "inputs": {}, "provenance": snapshot});
-        c.execute(
-            "INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,provenance,created_at,finished_at) VALUES (?1,?2,'a','terminal',?3,'hash',?4,'now','now')",
-            params![attempt, p, request.to_string(), snapshot.to_string()],
-        )
-        .unwrap();
-        c.execute(
-            "INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,finished_at) VALUES (?1,?2,?3,'a','now','now')",
-            params![sluice_model::ids::RunId::new().to_string(), p, attempt],
-        )
-        .unwrap();
-        if n == 0 {
-            attempts.push(attempt);
-        }
-    }
-    record(
-        c,
-        &p,
-        "step.status",
-        json!({"kind": "step.status", "step": "a", "from": "running", "to": "succeeded", "error": null, "run_ids": [], "needs": {}}),
-    );
-    record(
-        c,
-        &p,
-        "plan.input",
-        json!({"kind": "plan.input", "rev": 7, "author": "sam", "reason": "", "name": "repo", "value": "/repo"}),
-    );
-    (result, attempts.remove(0))
-}
-
 fn compact(value: &impl serde::Serialize) -> String {
     serde_json::to_string(value).unwrap()
 }
@@ -399,294 +343,12 @@ fn assert_indexes(c: &Connection, project: ProjectId) {
     assert_eq!(stored_edges, edges);
 }
 
-#[tokio::test]
-async fn slow_a_schema_1_home_converts_with_every_revision_round_tripped() {
-    let home = ScratchHome::new().unwrap();
-    let database = home.path().join("sluice.db");
-    let (revisions, stored) = history();
-    let (project, other, result, attempt) = {
-        let c = legacy_home(home.path(), 1);
-        let project = legacy_project(
-            &c,
-            &Legacy {
-                name: "lash",
-                revisions: revisions.clone(),
-                stored: stored.clone(),
-                trimmed: vec![3],
-            },
-        );
-        let other = legacy_project(
-            &c,
-            &Legacy {
-                name: "empty",
-                revisions: vec![json!([])],
-                stored: json!({"steps": {}}),
-                trimmed: vec![],
-            },
-        );
-        // A record whose author the history row does not share: a warning, not a blocker.
-        c.execute(
-            "UPDATE records SET payload=json_set(payload,'$.author','someone') WHERE kind='plan.edit' AND json_extract(payload,'$.rev')=7",
-            [],
-        )
-        .unwrap();
-        let (result, attempt) = runtime(&c, project);
-        (project, other, result, attempt)
-    };
-    // Readers and writers of the current schema refuse it and never convert it on open.
-    let before = bytes(&database);
-    for refusal in [
-        Writer::open(home.path()).map(|_| ()).unwrap_err(),
-        ReadPool::open(home.path(), 1).map(|_| ()).unwrap_err(),
-    ] {
-        assert!(matches!(
-            refusal,
-            StoreError::MigrationRequired { found: 1 }
-        ));
-        assert_eq!(
-            refusal.to_string(),
-            "this home is at schema 1; run \"sluice home migrate\" to bring it to schema 4"
-        );
-    }
-    assert_eq!(bytes(&database), before);
-
-    let report = convert_home(&database).unwrap();
-    assert_eq!(report.from_schema, 1);
-    let lash = report
-        .projects
-        .iter()
-        .find(|p| p.project_id == project)
-        .unwrap();
-    assert_eq!(
-        (lash.revisions, lash.steps, lash.inputs, lash.outputs),
-        (7, 2, 2, 1)
-    );
-    assert_eq!(lash.attempt_snapshots_removed, 2);
-    assert!(lash.records_rewritten >= 8, "{report:?}");
-    assert_eq!(report.warnings.len(), 2, "{:?}", report.warnings);
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|w| w.contains("at rev 7") && w.contains("author or reason"))
-    );
-    assert!(
-        report
-            .warnings
-            .iter()
-            .any(|w| w.contains("completion snapshot"))
-    );
-    assert_eq!(report.to_json()["projects"].as_array().unwrap().len(), 2);
-
-    let c = Connection::open(&database).unwrap();
-    // The home is schema 4 and schema-equivalent to a fresh one.
-    let versions: (i64, i64) = (
-        c.query_row("SELECT schema_version FROM home_meta", [], |r| r.get(0))
-            .unwrap(),
-        c.pragma_query_value(None, "user_version", |r| r.get(0))
-            .unwrap(),
-    );
-    assert_eq!(
-        versions,
-        (
-            sluice_store::schema::SCHEMA_VERSION,
-            sluice_store::schema::SCHEMA_VERSION
-        )
-    );
-    assert_eq!(schema_fingerprint(&c).unwrap(), fresh_fingerprint());
-    // The plan is its rows: the export is the stored plan, byte for byte.
-    let exported = plans::export_plan(&c, project).unwrap();
-    assert_eq!(exported.rev, Revision(7));
-    assert_eq!(compact(&exported.document), compact(&stored));
-    assert_eq!(
-        compact(&plans::export_plan(&c, other).unwrap().document),
-        r#"{"steps":{}}"#
-    );
-    // Every revision's changes, positioned by §10.6.
-    let changes: Vec<Vec<PlanChange>> = c
-        .prepare("SELECT changes FROM plan_edits WHERE project_id=?1 ORDER BY rev")
-        .unwrap()
-        .query_map([project.to_string()], |r| r.get::<_, String>(0))
-        .unwrap()
-        .map(|t| serde_json::from_str(&t.unwrap()).unwrap())
-        .collect();
-    let ops = |changes: &[PlanChange]| -> Vec<String> {
-        changes
-            .iter()
-            .map(|c| {
-                let v = serde_json::to_value(c).unwrap();
-                format!(
-                    "{} {}{}",
-                    v["op"].as_str().unwrap(),
-                    v.get("step")
-                        .or(v.get("name"))
-                        .or(v.get("root_order"))
-                        .unwrap(),
-                    v.get("position")
-                        .map_or(String::new(), |p| format!(" @{p}"))
-                )
-            })
-            .collect()
-    };
-    assert_eq!(
-        changes.iter().map(|c| ops(c)).collect::<Vec<_>>(),
-        vec![
-            vec![r#"header.put ["steps"]"#.to_owned()],
-            vec![
-                r#"header.put ["steps","inputs"]"#.into(),
-                r#"input.put "repo" @0"#.into(),
-                r#"step.put "a" @0"#.into()
-            ],
-            vec![r#"step.put "b" @1"#.into()],
-            vec![
-                r#"header.put ["inputs","outputs","steps"]"#.into(),
-                r#"input.put "limit" @1"#.into(),
-                r#"output.put "result" @0"#.into(),
-                r#"step.put "c" @0"#.into(),
-                r#"step.put "a" @1"#.into(),
-                r#"step.put "b" @2"#.into()
-            ],
-            vec![r#"step.delete "c""#.into()],
-            vec![
-                r#"output.delete "result""#.into(),
-                r#"output.put "final" @1"#.into()
-            ],
-            vec![r#"step.put "a" @1"#.into(), r#"step.put "b" @2"#.into()],
-        ]
-    );
-    // Declaration history alone rebuilds the plan's rows.
-    let rows = plans::read_plan_rows(&c, project).unwrap();
-    let rebuilt = rebuild(&changes);
-    assert_eq!(rebuilt.header.root_order, rows.header.root_order);
-    assert_eq!(
-        (rebuilt.inputs, rebuilt.outputs, rebuilt.steps),
-        (rows.inputs, rows.outputs, rows.steps.clone())
-    );
-    // Runtime state is kept; inputs hold their authored declaration and value.
-    let state = plans::read_state(&c, project).unwrap();
-    assert_eq!(
-        state.status(&"a".parse().unwrap()),
-        sluice_model::commands::StepStatus::Succeeded
-    );
-    assert_eq!(compact(&state.inputs), r#"{"repo":"/repo"}"#);
-    let row: (i64, String, String, String, i64, Option<String>, String) = c
-        .query_row(
-            "SELECT position,unit,paused,run,priority,needs,result_id FROM steps WHERE project_id=?1 AND step_id='a'",
-            [project.to_string()],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)),
-        )
-        .unwrap();
-    assert_eq!(
-        row,
-        (
-            1,
-            "u".into(),
-            "false".into(),
-            "echo".into(),
-            0,
-            None,
-            result
-        )
-    );
-    let declarations: Vec<String> = c
-        .prepare("SELECT declaration FROM inputs WHERE project_id=?1 ORDER BY position")
-        .unwrap()
-        .query_map([project.to_string()], |r| r.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(
-        declarations,
-        [r#""string""#, r#"{"type":"int","doc":"How many"}"#]
-    );
-    assert_indexes(&c, project);
-    // Records are payload version 2; a plan.edit carries its revision's changes.
-    let versions: Vec<i64> = c
-        .prepare("SELECT DISTINCT payload_version FROM records")
-        .unwrap()
-        .query_map([], |r| r.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(versions, [2]);
-    let edit: Value = serde_json::from_str(
-        &c.query_row(
-            "SELECT payload FROM records WHERE kind='plan.edit' AND project_id=?1 AND json_extract(payload,'$.rev')=4",
-            [project.to_string()],
-            |r| r.get::<_, String>(0),
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    assert!(edit.get("ops").is_none());
-    assert_eq!(edit["changes"], serde_json::to_value(&changes[3]).unwrap());
-    // Attempts lose their completion snapshots and keep everything else.
-    let (request, provenance): (String, String) = c
-        .query_row(
-            "SELECT request,provenance FROM attempts WHERE attempt_id=?1",
-            [&attempt],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .unwrap();
-    let (request, provenance): (Value, Value) = (
-        serde_json::from_str(&request).unwrap(),
-        serde_json::from_str(&provenance).unwrap(),
-    );
-    assert_eq!(
-        request["provenance"]["runtime"],
-        json!({"capability": "cap", "execution": "exec"})
-    );
-    assert_eq!(
-        provenance["runtime"],
-        json!({"capability": "cap", "execution": "exec"})
-    );
-    assert_eq!(request["declaration"], a_v1());
-    drop(c);
-
-    // The converted home opens, its history pages back to the origin, and it edits.
-    let reads = ReadPool::open(home.path(), 1).unwrap();
-    let (page, next) = reads
-        .snapshot(move |c| plans::history(c, project, None, None, 3))
-        .await
-        .unwrap();
-    assert_eq!(next, Some(page[2].seq));
-    match &page[0].event {
-        HistoryEvent::PlanEdit(edit) => {
-            assert_eq!(edit.rev, Revision(1));
-            assert_eq!(edit.reason, "project created");
-            assert_eq!(
-                compact(&edit.changes),
-                r#"[{"op":"header.put","root_order":["steps"]}]"#
-            );
-        }
-        other => panic!("{other:?}"),
-    }
-    let writer = Writer::open(home.path()).unwrap();
-    let rev = writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            let mut document = stored.clone();
-            document["steps"]["d"] = json!({"run": "echo", "after": ["unit:u"]});
-            sluice_store_support::commit_document(tx, project, &map(document), None, None)
-        })
-        .await
-        .unwrap();
-    assert_eq!(rev, Revision(8));
-    let (_, next) = reads
-        .snapshot(move |c| plans::history(c, project, Some(Revision(7)), None, 10))
-        .await
-        .unwrap();
-    assert_eq!(next, None);
-    let _ = RecordSeq(0);
-}
-
-use crate::plan_support as sluice_store_support;
-
 /// A schema-2 home (the interim board schema) that also predates later schema-1 columns
 /// converts to the same shape, even where a column it gains would land after a later one (as
 /// the live home's `projects` has `prune_*` before `board_doc*`): such a table is rebuilt in
 /// schema 3's column order. Its boards are kept and still work.
 #[tokio::test]
-async fn slow_a_schema_2_home_without_later_columns_converts_and_keeps_its_boards() {
+async fn a_schema_2_home_without_later_columns_converts_and_keeps_its_boards() {
     let home = ScratchHome::new().unwrap();
     let database = home.path().join("sluice.db");
     let project = {
@@ -1002,7 +664,7 @@ fn imported() -> (Vec<Value>, Vec<Value>) {
 /// (author `sluice`), the revisions after it convert as any other, each revision at or below it
 /// is folded with its record kept, and the report lists each anchor.
 #[tokio::test]
-async fn slow_imported_projects_are_anchored_at_an_exact_baseline() {
+async fn imported_projects_are_anchored_at_an_exact_baseline() {
     let (docs, ops) = imported();
     let stored = docs[3].clone();
     let home = ScratchHome::new().unwrap();
@@ -1227,80 +889,4 @@ async fn slow_imported_projects_are_anchored_at_an_exact_baseline() {
         edits,
         vec![(2, "sluice".into()), (3, "sam".into()), (4, "sam".into())]
     );
-}
-
-/// A restore of a schema-1 backup converts it on its private destination; one holding live
-/// work is refused before anything is written, with §10.2's message.
-#[test]
-fn slow_a_schema_changing_restore_converts_and_refuses_live_work() {
-    let (revisions, stored) = history();
-    let scratch = ScratchHome::new().unwrap();
-    let source = scratch.root().join("legacy");
-    std::fs::create_dir(&source).unwrap();
-    let c = legacy_home(&source, 1);
-    let project = legacy_project(
-        &c,
-        &Legacy {
-            name: "lash",
-            revisions,
-            stored: stored.clone(),
-            trimmed: vec![],
-        },
-    );
-    let p = project.to_string();
-    let attempt = sluice_model::ids::AttemptId::new().to_string();
-    let run = sluice_model::ids::RunId::new().to_string();
-    c.execute(
-        "INSERT INTO attempts(attempt_id,project_id,step_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'b','executing','{}','h','now')",
-        params![attempt, p],
-    )
-    .unwrap();
-    c.execute(
-        "INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,unit_name,cgroup) VALUES (?1,?2,?3,'b','now','sluice-run-x','/x')",
-        params![run, p, attempt],
-    )
-    .unwrap();
-    let destination = scratch.root().join("restored");
-    let refused =
-        backup::restore_into_fresh_home(&source.join("sluice.db"), &destination).unwrap_err();
-    assert!(matches!(
-        refused,
-        StoreError::LiveWorkInBackup {
-            attempts: 1,
-            runs: 1,
-            leases: 0,
-            calls: 0
-        }
-    ));
-    assert_eq!(
-        refused.into_public(false),
-        PublicError::Invalid {
-            message: "this backup holds live work (1 attempts, 1 runs, 0 leases, 0 calls); a schema-changing restore needs a backup taken with nothing live".into(),
-            errors: vec![],
-        }
-    );
-    assert!(!destination.exists(), "the refused restore wrote nothing");
-    // With the run ended, the same backup restores and converts.
-    c.execute("UPDATE attempts SET phase='terminal'", [])
-        .unwrap();
-    c.execute("UPDATE runs SET finished_at='now'", []).unwrap();
-    drop(c);
-    backup::restore_into_fresh_home(&source.join("sluice.db"), &destination).unwrap();
-    ReadPool::open(&destination, 1).unwrap();
-    let exported = plans::export_plan(
-        &Connection::open(destination.join("sluice.db")).unwrap(),
-        project,
-    )
-    .unwrap();
-    assert_eq!(compact(&exported.document), compact(&stored));
-    // A current-schema backup restores without converting.
-    let again = scratch.root().join("again");
-    backup::restore_into_fresh_home(&destination.join("sluice.db"), &again).unwrap();
-    ReadPool::open(&again, 1).unwrap();
-    // Converting a current-schema home is refused as already done.
-    assert!(matches!(
-        convert_home(&again.join("sluice.db")),
-        Err(StoreError::ConversionBlocked(b)) if b == ["home: already at schema 4"]
-    ));
-    let _ = convert::live_work;
 }

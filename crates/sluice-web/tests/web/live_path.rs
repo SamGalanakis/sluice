@@ -225,45 +225,6 @@ async fn a_step_or_unit_that_left_the_plan_is_said_in_place_and_its_stream_stays
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_streams_first_batch_names_the_build_that_drew_it() {
-    let f = Fixture::new().await;
-    let router = f.router();
-    let path = format!("/projects/id/{}", f.id);
-    let (_, page) = f.get(&path).await;
-    let release = page
-        .split("data-release=\"")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
-        .unwrap()
-        .to_owned();
-    assert!(!release.is_empty());
-    // at the drawn version, the first batch only confirms it, and names the build
-    let at = url::form_urlencoded::byte_serialize(
-        serde_json::json!({"ver": drawn_version(&page)})
-            .to_string()
-            .as_bytes(),
-    )
-    .collect::<String>();
-    let mut body = open(&router, &format!("{path}/stream?datastar={at}")).await;
-    let first = first_batch(&mut body).await;
-    assert!(first.contains(&format!("\"rel\":\"{release}\"")), "{first}");
-    assert!(!first.contains("datastar-patch-elements"), "{first}");
-    // a step's own page likewise: its stream is the page's, at the version it was drawn with
-    let step = format!("{path}/steps/alpha-review");
-    let (_, page) = f.get(&step).await;
-    let at = url::form_urlencoded::byte_serialize(
-        serde_json::json!({"ver": drawn_version(&page)})
-            .to_string()
-            .as_bytes(),
-    )
-    .collect::<String>();
-    let mut body = open(&router, &format!("{step}/stream?page=true&datastar={at}")).await;
-    let first = first_batch(&mut body).await;
-    assert!(first.contains(&format!("\"rel\":\"{release}\"")), "{first}");
-    assert!(!first.contains("datastar-patch-elements"), "{first}");
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_hidden_tab_asks_for_its_title_alone() {
     let f = Fixture::new().await;
     let (status, home) = f.get("/title").await;
@@ -298,75 +259,6 @@ async fn serve(router: Router) -> (String, tokio::task::JoinHandle<()>) {
 }
 fn screens(name: &str) -> Option<std::path::PathBuf> {
     std::env::var_os("SLUICE_LIVE_SCREENS").map(|d| std::path::PathBuf::from(d).join(name))
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_settings_save_refuses_to_write_over_another_authors_change() {
-    let f = Fixture::new().await;
-    let (base, server) = serve(f.router()).await;
-    let id = f.id;
-    let settings = format!("{base}/projects/id/{id}/settings");
-    let mut browser = tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&settings).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelector('#project-description')")
-            .unwrap();
-        browser
-            .eval("document.querySelector('#project-description').value='The owner\\'s words'")
-            .unwrap();
-        browser
-    })
-    .await
-    .unwrap();
-    // an agent rewrites the description while the owner's form is open
-    f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::project_update(
-                tx,
-                &ProjectSelector::Id(id),
-                projects::UpdateProject {
-                    description: Some("The agent's words".into()),
-                    author: "cli".into(),
-                    ..Default::default()
-                },
-                &projects::NoResourceSettings,
-            )
-        })
-        .await
-        .unwrap();
-    let mut browser = tokio::task::spawn_blocking(move || {
-        // the owner saves anyway: refused, never written over the agent's, the owner's words
-        // kept in the box
-        browser.eval("document.querySelector('#details-form').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#details-form-said[role=alert]')?.textContent === 'Not saved: the description changed since this page was drawn (by cli). Reload to see it, then save again.'").unwrap();
-        assert_eq!(browser.eval("document.querySelector('#project-description').value").unwrap(), "The owner's words");
-        if let Some(path) = screens("settings-changed.png") {
-            browser.viewport(1440, "light").unwrap();
-            browser.screenshot(&path).unwrap();
-        }
-        // reloaded: the agent's words, and the form saves again
-        browser.eval("location.reload()").unwrap();
-        browser.wait("document.readyState === 'complete' && document.querySelector('#project-description')?.value === 'The agent\\'s words'").unwrap();
-        browser.eval("document.querySelector('#project-description').value='Both, merged';document.querySelector('#details-form').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#details-form-said[role=status]')?.textContent === 'Saved.'").unwrap();
-        // another section saves after another author's change to this one
-        browser.eval("document.querySelector('#prune-done-after').value='6';document.querySelector('#retiring-form').requestSubmit()").unwrap();
-        browser.wait("document.querySelector('#retiring-form-said[role=status]')?.textContent === 'Saved.'").unwrap();
-        browser
-    })
-    .await
-    .unwrap();
-    let description = f
-        .dashboard
-        .reads
-        .snapshot(move |c| Ok(projects::resolve(c, &ProjectSelector::Id(id))?.description))
-        .await
-        .unwrap();
-    assert_eq!(description, "Both, merged");
-    tokio::task::spawn_blocking(move || drop(browser.eval("1")))
-        .await
-        .unwrap();
-    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -481,6 +373,41 @@ async fn slow_chromium_a_patch_keeps_the_action_the_more_menu_and_a_refused_fiel
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_updates_stopped_say_so_reconnect_and_a_new_build_asks_for_a_reload() {
     let f = Fixture::new().await;
+    let router = f.router();
+    let path = format!("/projects/id/{}", f.id);
+    let (_, page) = f.get(&path).await;
+    let release = page
+        .split("data-release=\"")
+        .nth(1)
+        .and_then(|s| s.split('"').next())
+        .unwrap()
+        .to_owned();
+    assert!(!release.is_empty());
+    // at the drawn version, the first batch only confirms it, and names the build
+    let at = url::form_urlencoded::byte_serialize(
+        serde_json::json!({"ver": drawn_version(&page)})
+            .to_string()
+            .as_bytes(),
+    )
+    .collect::<String>();
+    let mut body = open(&router, &format!("{path}/stream?datastar={at}")).await;
+    let first = first_batch(&mut body).await;
+    assert!(first.contains(&format!("\"rel\":\"{release}\"")), "{first}");
+    assert!(!first.contains("datastar-patch-elements"), "{first}");
+    // a step's own page likewise: its stream is the page's, at the version it was drawn with
+    let step = format!("{path}/steps/alpha-review");
+    let (_, page) = f.get(&step).await;
+    let at = url::form_urlencoded::byte_serialize(
+        serde_json::json!({"ver": drawn_version(&page)})
+            .to_string()
+            .as_bytes(),
+    )
+    .collect::<String>();
+    let mut body = open(&router, &format!("{step}/stream?page=true&datastar={at}")).await;
+    let first = first_batch(&mut body).await;
+    assert!(first.contains(&format!("\"rel\":\"{release}\"")), "{first}");
+    assert!(!first.contains("datastar-patch-elements"), "{first}");
+
     let (base, server) = serve(f.router()).await;
     let lanes = f.id;
     let page = format!("{base}/projects/id/{lanes}");

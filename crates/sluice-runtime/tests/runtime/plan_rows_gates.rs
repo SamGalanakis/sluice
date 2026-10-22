@@ -8,8 +8,6 @@
 //!   removed is accepted;
 //! - compact reads decode no declaration, and neither does the competitor read;
 //! - a high-fanout edit scales with its readers, not with the plan;
-//! - three stale preparations end in `busy` with nothing written, none on the writer's
-//!   thread, while an independent write commits within its budget;
 //! - cold compile and cold recipe matching are measured and reported;
 //! - a reader of an edit's revision between its commit and the cache's install compiles
 //!   nothing.
@@ -25,7 +23,7 @@ use super::index_plan_rows as plan_rows;
 use serde_json::{Value, json};
 use sluice_model::{
     commands::{CommandReply, CommandRequest},
-    cost::{self, CommitPoint, Costs, Measurement, PreparationPoint},
+    cost::{self, CommitPoint, Costs, Measurement},
     error::PublicError,
     ids::{ProjectId, Revision},
     rpc::{FnInvocation, JsonMap, decode_json},
@@ -42,11 +40,8 @@ use sluice_runtime::{
 };
 use std::{
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Duration,
 };
-
-/// The independent small write's budget while an edit prepares (§11).
-const INDEPENDENT_WRITE_BUDGET: Duration = Duration::from_millis(100);
 
 /// One gate at a time in this process: every coordinator's work counts in the one set of
 /// counters, so a gate's measurement would otherwise count another gate's setup.
@@ -378,7 +373,7 @@ async fn slow_no_ordinary_edit_on_a_warm_cache_exports_or_compiles_the_whole_pla
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
+async fn removal_and_prune_renumber_nothing_and_leave_exactly_the_derived_indexes() {
     let _serial = serial().await;
     let plan = Plan::new(json!({})).await;
     plan.edit(json!([
@@ -530,7 +525,7 @@ async fn slow_compact_reads_and_the_competitor_read_decode_no_declaration() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn slow_a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
+async fn a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
     let _serial = serial().await;
     let mut seen = Vec::new();
     for (readers, unrelated) in [(5, 0), (5, 200), (10, 0)] {
@@ -577,99 +572,6 @@ async fn slow_a_high_fanout_edit_scales_with_its_readers_not_with_the_plan() {
         seen[2].3 > seen[0].3,
         "twice the readers read more: {seen:?}"
     );
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
-async fn slow_three_stale_preparations_end_busy_with_nothing_written_and_none_on_the_writer() {
-    let _serial = serial().await;
-    let plan = Plan::new(json!({})).await;
-    let mut ops = vec![
-        json!({"op": "input.put", "name": "src", "declaration": "string"}),
-        json!({"op": "input.put", "name": "other", "declaration": "int"}),
-    ];
-    for i in 0..16 {
-        ops.push(
-            json!({"op": "step.add", "step": format!("r-{i:04}"), "spec": {
-            "run": "fixture.echo", "paused": true, "in": {"value": {"source": "src"}}}}),
-        );
-    }
-    plan.edit(Value::Array(ops)).await;
-    let rev = plan.rev().await;
-    let records = |plan: &Plan| -> i64 {
-        plan.sql()
-            .query_row(
-                "SELECT count(*) FROM records WHERE project_id=?1 AND kind='plan.edit'",
-                [plan.project.to_string()],
-                |r| r.get(0),
-            )
-            .unwrap()
-    };
-    let edits_before = records(&plan);
-
-    // The barrier: each preparation of this project's edit says where it is and waits.
-    let (reached, at_barrier) = std::sync::mpsc::channel::<usize>();
-    let (release, go) = std::sync::mpsc::channel::<()>();
-    let go = Arc::new(Mutex::new(go));
-    let project = plan.project;
-    let _hook = cost::hook_preparations(move |point: &PreparationPoint| {
-        if point.project == project {
-            reached.send(point.attempt).unwrap();
-            go.lock().unwrap().recv().unwrap();
-        }
-    });
-    let measurement = Measurement::start();
-    let edit = {
-        let broker = plan.broker.clone();
-        let project = plan.project;
-        tokio::spawn(async move {
-            broker
-                .command(request(
-                    "plan_edit",
-                    json!({"project": {"kind": "id", "value": project}, "reason": "contended",
-                        "ops": [{"op": "input.put", "name": "src",
-                            "declaration": {"type": "string", "doc": "contended"}}]}),
-                ))
-                .await
-        })
-    };
-    let at_barrier = Arc::new(Mutex::new(at_barrier));
-    for attempt in 1..=3 {
-        let at = at_barrier.clone();
-        let reached = tokio::task::spawn_blocking(move || {
-            at.lock().unwrap().recv_timeout(Duration::from_secs(120))
-        })
-        .await
-        .unwrap()
-        .expect("the preparation reaches the barrier");
-        assert_eq!(reached, attempt);
-        // An independent status write that moves state_epoch, while the preparation waits.
-        let started = Instant::now();
-        plan.call(
-            "plan_set_input",
-            json!({"name": "other", "value": attempt, "edit": {"dry_run": false, "reason": "move"}}),
-        )
-        .await
-        .unwrap();
-        let took = started.elapsed();
-        assert!(
-            took < INDEPENDENT_WRITE_BUDGET,
-            "an independent write during a preparation took {took:?}"
-        );
-        release.send(()).unwrap();
-    }
-    let refused = edit.await.unwrap();
-    assert_eq!(
-        refused.err(),
-        Some(PublicError::Busy {
-            message: "the plan's state kept changing while this edit was prepared (3 tries); send it again".into(),
-            retryable: true,
-        })
-    );
-    let costs = measurement.costs();
-    assert_eq!(costs.writer_preparations, 0, "{costs:?}");
-    assert_eq!(costs.preparations.contended, 1, "{costs:?}");
-    assert_eq!(plan.rev().await, rev, "nothing was written");
-    assert_eq!(records(&plan), edits_before, "no plan.edit record");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -89,36 +89,6 @@ async fn board(f: &Fixture) -> String {
 }
 
 #[tokio::test]
-async fn settings_show_the_document_read_only_with_its_rev_and_last_edit() {
-    let f = Fixture::new().await;
-    let settings = format!("/projects/id/{}/settings", f.id);
-    let (_, page) = f.get(&settings).await;
-    let section = between(&page, "<div id=\"board-doc\">", "<!--/board-doc-->");
-    assert!(section.contains("Not written yet."), "{section}");
-    write_doc(&f, "## Phase\n\nGreen <now>", "orch").await;
-    let (_, page) = f.get(&settings).await;
-    let section = between(&page, "<div id=\"board-doc\">", "<!--/board-doc-->");
-    assert!(
-        section.contains("Rev 1 · edited <time data-ago=\""),
-        "{section}"
-    );
-    assert!(section.contains("</time> by orch"), "{section}");
-    assert!(
-        section.contains("<h4>Phase</h4>") && section.contains("Green &lt;now&gt;"),
-        "{section}"
-    );
-    assert!(!section.contains("<textarea"), "read-only: {section}");
-    // A program without a Doc() does not show it, and the page says so.
-    set_board(&f, f.id, "root = Units()").await;
-    let (_, page) = f.get(&settings).await;
-    let section = between(&page, "<div id=\"board-doc\">", "<!--/board-doc-->");
-    assert!(
-        section.contains("Not shown: the program has no <code>Doc()</code>."),
-        "{section}"
-    );
-}
-
-#[tokio::test]
 async fn board_document_messages_and_retired_data() {
     let f = Fixture::new().await;
     {

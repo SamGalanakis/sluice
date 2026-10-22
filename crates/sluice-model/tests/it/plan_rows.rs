@@ -84,73 +84,6 @@ fn exact_value<T: Serialize + DeserializeOwned + PartialEq + std::fmt::Debug>(
     decoded
 }
 
-#[test]
-fn cursor_text_and_filter_digest_are_pinned() {
-    let f = fixture("cursor");
-    let project: ProjectId = f["project_id"].as_str().unwrap().parse().unwrap();
-    let filter = PlanReadFilter {
-        units: Some(vec![UnitName::new("normalize").unwrap()]),
-        steps: None,
-        status: serde_json::from_value(f["filter"]["status"].clone()).unwrap(),
-        recipe: None,
-    };
-    assert_eq!(filter.digest(project), f["digest"].as_str().unwrap());
-    // Filters are sets: order and repeats do not change the digest.
-    let mut shuffled = filter.clone();
-    shuffled.status.as_mut().unwrap().reverse();
-    shuffled
-        .units
-        .as_mut()
-        .unwrap()
-        .push(UnitName::new("normalize").unwrap());
-    assert_eq!(shuffled.digest(project), filter.digest(project));
-    assert_ne!(
-        PlanReadFilter::default().digest(project),
-        filter.digest(project)
-    );
-    assert!(filter.binds_state() && !filter.binds_recipes());
-
-    let cursor = PlanCursor {
-        filter: filter.digest(project),
-        rev: Revision(f["rev"].as_u64().unwrap()),
-        state_epoch: Some(StateEpoch(f["state_epoch"].as_u64().unwrap())),
-        recipe_generation: None,
-        position: f["position"].as_u64().unwrap(),
-        step: StepId::new(f["step"].as_str().unwrap()).unwrap(),
-    };
-    let text = f["text"].as_str().unwrap();
-    assert_eq!(cursor.encode(), text);
-    assert_eq!(PlanCursor::parse(text).unwrap(), cursor);
-    assert_eq!(
-        fixture("plan_read.reply")["next_cursor"],
-        json!(text),
-        "the reply's cursor is this one"
-    );
-    let with_recipes = PlanCursor {
-        recipe_generation: Some(RecipeGeneration("5f0c1e9a7b3d2468".into())),
-        state_epoch: None,
-        ..cursor
-    };
-    assert_eq!(
-        PlanCursor::parse(&with_recipes.encode()).unwrap(),
-        with_recipes
-    );
-    for bad in [
-        "",
-        "v2:8a7c2b92c2848cc3:41:9120:-:503:normalize-work",
-        "v1:8a7c2b92:41:9120:-:503:normalize-work",
-        "v1:8a7c2b92c2848cc3:41:x:-:503:normalize-work",
-        "v1:8a7c2b92c2848cc3:41:9120:-:503:Normalize",
-        "v1:8a7c2b92c2848cc3:41:9120:-:503:normalize-work:extra",
-    ] {
-        assert_eq!(
-            PlanCursor::parse(bad),
-            Err(PlanRowsError::CursorMalformed),
-            "{bad}"
-        );
-    }
-}
-
 /// The supplied-shape refusals (§7.6): only what a caller sends is checked, the first refusal
 /// wins, and the fixtures' own requests pass.
 #[test]
@@ -503,5 +436,71 @@ fn documented_plan_rows_codecs() {
     {
         let _: CutoverReport = exact("cutover.report");
         let _: CancelRefusal = exact("cutover.refused");
+    }
+
+    {
+        let f = fixture("cursor");
+        let project: ProjectId = f["project_id"].as_str().unwrap().parse().unwrap();
+        let filter = PlanReadFilter {
+            units: Some(vec![UnitName::new("normalize").unwrap()]),
+            steps: None,
+            status: serde_json::from_value(f["filter"]["status"].clone()).unwrap(),
+            recipe: None,
+        };
+        assert_eq!(filter.digest(project), f["digest"].as_str().unwrap());
+        // Filters are sets: order and repeats do not change the digest.
+        let mut shuffled = filter.clone();
+        shuffled.status.as_mut().unwrap().reverse();
+        shuffled
+            .units
+            .as_mut()
+            .unwrap()
+            .push(UnitName::new("normalize").unwrap());
+        assert_eq!(shuffled.digest(project), filter.digest(project));
+        assert_ne!(
+            PlanReadFilter::default().digest(project),
+            filter.digest(project)
+        );
+        assert!(filter.binds_state() && !filter.binds_recipes());
+
+        let cursor = PlanCursor {
+            filter: filter.digest(project),
+            rev: Revision(f["rev"].as_u64().unwrap()),
+            state_epoch: Some(StateEpoch(f["state_epoch"].as_u64().unwrap())),
+            recipe_generation: None,
+            position: f["position"].as_u64().unwrap(),
+            step: StepId::new(f["step"].as_str().unwrap()).unwrap(),
+        };
+        let text = f["text"].as_str().unwrap();
+        assert_eq!(cursor.encode(), text);
+        assert_eq!(PlanCursor::parse(text).unwrap(), cursor);
+        assert_eq!(
+            fixture("plan_read.reply")["next_cursor"],
+            json!(text),
+            "the reply's cursor is this one"
+        );
+        let with_recipes = PlanCursor {
+            recipe_generation: Some(RecipeGeneration("5f0c1e9a7b3d2468".into())),
+            state_epoch: None,
+            ..cursor
+        };
+        assert_eq!(
+            PlanCursor::parse(&with_recipes.encode()).unwrap(),
+            with_recipes
+        );
+        for bad in [
+            "",
+            "v2:8a7c2b92c2848cc3:41:9120:-:503:normalize-work",
+            "v1:8a7c2b92:41:9120:-:503:normalize-work",
+            "v1:8a7c2b92c2848cc3:41:x:-:503:normalize-work",
+            "v1:8a7c2b92c2848cc3:41:9120:-:503:Normalize",
+            "v1:8a7c2b92c2848cc3:41:9120:-:503:normalize-work:extra",
+        ] {
+            assert_eq!(
+                PlanCursor::parse(bad),
+                Err(PlanRowsError::CursorMalformed),
+                "{bad}"
+            );
+        }
     }
 }

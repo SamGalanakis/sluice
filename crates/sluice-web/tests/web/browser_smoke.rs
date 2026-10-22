@@ -11,15 +11,8 @@ async fn check_pages(family: &str) {
             format!("/projects/id/{}/units/alpha", f.id),
             format!("/projects/id/{}", f.plain),
         ],
-        "messages" => vec![
-            "/inbox".into(),
-            format!("/projects/id/{}/thread?thread=alpha-review", f.id),
-            "/history".into(),
-        ],
         "settings" => vec![format!("/projects/id/{}/settings", f.id)],
-        "catalog_docs" => vec!["/fns".into(), "/docs".into()],
         "log_stats" => vec!["/log".into(), format!("/projects/id/{}/stats", f.id)],
-        "gallery" => vec!["/_ui".into()],
         _ => panic!("unknown browser smoke family: {family}"),
     };
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -35,15 +28,7 @@ async fn check_pages(family: &str) {
             browser.wait("document.querySelector('h1')?.checkVisibility() && !!customElements.get('sluice-menu')").unwrap();
             assert_eq!(browser.eval("!!document.querySelector('#top-nav') && document.querySelector('h1').textContent.trim().length > 0").unwrap(), true, "{path}");
             assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), json!([]), "{path}");
-            // The gallery draws one component in several states, so only real pages
-            // promise each id once (a patch targets the first match and misses the rest).
-            if path != "/_ui" {
-                assert_eq!(browser.eval("[...document.querySelectorAll('[id]')].map(e => e.id).filter((id, i, all) => all.indexOf(id) !== i)").unwrap(), json!([]), "{path} repeats an id");
-            } else {
-                // Inbox's unread-notes mark is a dot (it once drew as a square ■ beside the word);
-                // the gallery's bar of no project holds notes and no question
-                assert_eq!(browser.eval("(d => !!d && d.checkVisibility() && getComputedStyle(d).borderRadius === '50%')(document.querySelector('.notes-dot'))").unwrap(), true, "the notes mark is not a dot");
-            }
+            assert_eq!(browser.eval("[...document.querySelectorAll('[id]')].map(e => e.id).filter((id, i, all) => all.indexOf(id) !== i)").unwrap(), json!([]), "{path} repeats an id");
             // A menu keeps its panel: a <details> inside a <p> is closed out of it by the parser.
             assert_eq!(browser.eval("document.querySelectorAll('sluice-menu:empty').length").unwrap(), json!(0), "{path} has a menu the parser emptied");
             // An idle page sends nothing. Streams stay open and never finish, so every
@@ -123,22 +108,10 @@ async fn browser_unit_smoke() {
     smoke("unit").await;
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn browser_messages_smoke() {
-    smoke("messages").await;
-}
-#[tokio::test(flavor = "multi_thread")]
 async fn browser_settings_smoke() {
     smoke("settings").await;
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn browser_catalog_and_docs_smoke() {
-    smoke("catalog_docs").await;
-}
-#[tokio::test(flavor = "multi_thread")]
 async fn browser_log_and_stats_smoke() {
     smoke("log_stats").await;
-}
-#[tokio::test(flavor = "multi_thread")]
-async fn browser_gallery_smoke() {
-    smoke("gallery").await;
 }

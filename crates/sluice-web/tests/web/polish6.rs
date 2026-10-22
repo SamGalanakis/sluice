@@ -9,11 +9,9 @@
 //! drawer through the board, the board alone keeps the summary's tags, and a wide screen sets a
 //! step's Overview two to a row.
 use crate::board_fixture;
-use crate::chrome;
 use crate::plan_html;
 use crate::stored_messages;
 use board_fixture::Fixture;
-use chrome::Chrome;
 use serde_json::json;
 use sluice_model::{
     error::PublicError,
@@ -105,99 +103,6 @@ async fn say(
     .await
     .id
     .0
-}
-
-async fn serve(f: &Fixture) -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    (
-        addr,
-        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() }),
-    )
-}
-
-fn press(browser: &mut Chrome, key: &str, code: &str) {
-    for kind in ["keyDown", "keyUp"] {
-        browser
-            .send(
-                "Input.dispatchKeyEvent",
-                json!({"type": kind, "key": key, "code": code, "text": if kind == "keyDown" { key } else { "" }}),
-            )
-            .unwrap();
-    }
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_a_code_block_keeps_its_lines_and_the_keys_find_and_move() {
-    let f = Fixture::new().await;
-    let id = f.titled().await;
-    say(
-        &f,
-        id,
-        "step-l1-work",
-        "l1-work",
-        "orchestrator",
-        "The plan:\n\n```json\n{\"inputs\": {\"repo\": \"string\"},\n  \"steps\": {\"work\": {\"run\": \"agent.run\", \"in\": {\"engine\": {\"default\": \"devin\"}, \"cwd\": {\"source\": \"repo\"}, \"spec\": {\"source\": \"tasks\"}}}}}\n```",
-    )
-    .await;
-    let (addr, server) = serve(&f).await;
-    tokio::task::spawn_blocking(move || {
-        let base = format!("http://{addr}/projects/id/{id}");
-        let mut browser = Chrome::open(&format!("{base}/steps/l1-work?tab=messages")).unwrap();
-        browser.viewport(390, "light").unwrap();
-        browser.wait("document.querySelector('.m-body pre > code')").unwrap();
-        // one box: the code in it is no chip, its lines and indentation kept, a long line
-        // wrapping in a message (a path is read whole, never scrolled to)
-        let code = browser
-            .eval("(() => { const c = document.querySelector('.m-body pre > code'), p = c.parentElement, cs = getComputedStyle(c), ps = getComputedStyle(p); return [cs.borderTopWidth, cs.backgroundColor, ps.whiteSpace, p.scrollWidth > p.clientWidth, document.documentElement.scrollWidth <= innerWidth]; })()")
-            .unwrap();
-        assert_eq!(code, json!(["0px", "rgba(0, 0, 0, 0)", "pre-wrap", false, true]));
-
-        // `/` on a step's page takes the sidebar's find, which finds on its plan
-        browser.viewport(1440, "light").unwrap();
-        browser.navigate(&format!("{base}/steps/l1-work")).unwrap();
-        browser.wait("customElements.get('sluice-keys') && document.querySelector('.sidebar input[data-find]')").unwrap();
-        press(&mut browser, "/", "Slash");
-        browser
-            .wait(&format!("document.activeElement?.matches('.sidebar input[data-find]') && new URL(document.activeElement.form.action).pathname === '/projects/id/{id}'"))
-            .unwrap();
-
-        // `]` and `[` move the drawer through the plan's steps, in its order as drawn
-        browser.navigate(&format!("{base}#step:l1-work")).unwrap();
-        browser
-            .wait("customElements.get('sluice-drawer') && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
-            .unwrap();
-        let order = browser
-            .eval("[...new Set([...document.querySelectorAll('#plan-pane a[data-step], #plan-pane [data-steps]')].flatMap(e => e.matches('a[data-step]') ? [e.dataset.step] : e.dataset.steps.split(' ')))]")
-            .unwrap();
-        let order: Vec<String> = serde_json::from_value(order).unwrap();
-        let at = order.iter().position(|s| s == "l1-work").unwrap();
-        let next = order[at + 1].clone();
-        browser.eval("document.querySelector('#drawer').focus()").unwrap();
-        press(&mut browser, "]", "BracketRight");
-        browser
-            .wait(&format!("location.hash === '#step:{next}' && document.querySelector('#step-detail[data-step=\"{next}\"] #d-title')"))
-            .unwrap();
-        press(&mut browser, "[", "BracketLeft");
-        // back, and drawn: a field put in before its detail streams in would be replaced
-        browser
-            .wait("location.hash === '#step:l1-work' && document.querySelector('#step-detail[data-step=\"l1-work\"] #d-title')")
-            .unwrap();
-        // typing in a field is the field's
-        browser
-            .eval("(() => { const t = document.createElement('textarea'); t.id = 'probe'; document.querySelector('#step-detail').append(t); t.focus(); })()")
-            .unwrap();
-        press(&mut browser, "]", "BracketRight");
-        browser
-            .wait("new Promise(r => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))")
-            .unwrap();
-        assert_eq!(browser.eval("location.hash").unwrap(), json!("#step:l1-work"));
-        assert_eq!(browser.eval("window.browserErrors").unwrap(), json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
 }
 
 #[tokio::test]

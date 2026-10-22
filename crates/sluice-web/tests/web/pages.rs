@@ -2,8 +2,8 @@
 //! answers a question in place; the day sets every run of the last 24 hours in the hour it
 //! started, on the reader's clock, with its outcome and a rule at now, and its stream patches
 //! only when the runs change; and in Chromium a question answered on home says so where it was
-//! asked, and no page scrolls sideways from 320px to 3840px. `SLUICE_PAGES_SCREENS=<dir>` also
-//! saves every page at each width in light and at 390, 1440 and 2560 in dark.
+//! asked, and no page scrolls sideways at 390, 1440 and 2560px in either theme.
+//! `SLUICE_PAGES_SCREENS=<dir>` saves each page at every width and theme.
 use crate::board_fixture;
 use crate::chrome;
 use crate::neutral;
@@ -318,6 +318,11 @@ async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_scr
         let pages = [
             ("home", "/".to_owned()),
             ("day", "/day".to_owned()),
+            ("plan", format!("/projects/id/{}", n.almanac)),
+            ("step", format!("/projects/id/{}/steps/a-4-review", n.almanac)),
+            ("unit", format!("/projects/id/{}/units/a-4", n.almanac)),
+            ("stats", format!("/projects/id/{}/stats", n.almanac)),
+            ("gallery", "/_ui".to_owned()),
             ("project-day", format!("/projects/id/{}/day", n.almanac)),
             ("log", "/log".to_owned()),
             ("project-log", format!("/projects/id/{}/log", n.almanac)),
@@ -333,11 +338,6 @@ async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_scr
         let mut browser = Chrome::open(&format!("{base}/")).unwrap();
         for width in [390, 1440, 2560] {
             for theme in ["light", "dark"] {
-                // dark is checked and shot at the three review widths, light at every width
-                let shoot = screens.is_some() && (theme == "light" || [390, 1440, 2560].contains(&width));
-                if theme == "dark" && !(screens.is_some() && [390, 1440, 2560].contains(&width)) {
-                    continue;
-                }
                 browser.viewport(width, theme).unwrap();
                 for (name, path) in &pages {
                     browser.navigate(&format!("{base}{path}")).unwrap();
@@ -358,7 +358,7 @@ async fn slow_chromium_no_page_scrolls_sideways_from_a_small_phone_to_a_wide_scr
                     // and that column centred in the room beside the sidebar
                     let gap = browser.eval("(m => { const a = document.querySelector('.mainarea').getBoundingClientRect(), r = m.getBoundingClientRect(); return Math.abs((r.left - a.left) - (a.right - r.right)); })(document.querySelector('main'))").unwrap();
                     assert!(gap.as_f64().unwrap() < 1.0, "{name} {width}: off centre by {gap}");
-                    if let (true, Some(dir)) = (shoot, &screens) {
+                    if let Some(dir) = &screens {
                         browser
                             .screenshot(&dir.join(format!("{name}-{width}-{theme}.png")))
                             .unwrap();

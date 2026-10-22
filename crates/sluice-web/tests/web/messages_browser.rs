@@ -150,139 +150,13 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
     server.abort();
 }
 
-/// A question to the owner is answered where it is read, the step's Overview among them, and
-/// the answer is confirmed there: the buttons and box give way to "Answered: sent to … · Read
-/// the thread", spoken; on the inbox the card keeps its place, the nav's count drops.
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_an_answer_is_confirmed_where_it_was_given() {
-    let f = Fixture::new().await;
-    for (thread, from) in [("step-beta-build", "beta-build"), ("owner", "orchestrator")] {
-        stored_messages::stored(
-            &f.writer,
-            f.id,
-            stored_messages::Stored {
-                thread,
-                from,
-                to: Some("owner"),
-                body: "Land it before the rename?\n\n- **Now:** rebase after.\n- **Later:** wait.",
-                title: Some("Land it before the rename?"),
-                question: true,
-                ..Default::default()
-            },
-        )
-        .await;
-    }
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    let lanes = f.id;
-    let f = std::sync::Arc::new(f);
-    let checks = f.clone();
-    tokio::task::spawn_blocking(move || {
-        let f = checks;
-        let base = format!("http://{addr}");
-        let mut browser =
-            Chrome::open(&format!("{base}/projects/id/{lanes}/steps/beta-build")).unwrap();
-        browser.viewport(1440, "light").unwrap();
-        browser
-            .wait("document.readyState === 'complete' && !!document.querySelector('#tp-overview sluice-answer .answer[data-drawn]')")
-            .unwrap();
-        // the Overview's copy: whole, its list kept, Answer opens its own box
-        assert_eq!(
-            browser.eval("document.querySelector('#tp-overview .q-card .q-body li strong')?.textContent").unwrap(),
-            "Now:"
-        );
-        browser
-            .eval("document.querySelector('#tp-overview sluice-answer button.q-toggle').click()")
-            .unwrap();
-        browser
-            .wait("document.activeElement?.id?.startsWith('ov-reply-')")
-            .unwrap();
-        browser
-            .eval("(t => { t.value = 'Land it now.'; t.form.requestSubmit(); })(document.activeElement)")
-            .unwrap();
-        browser
-            .wait("!!document.querySelector('#tp-overview .q-answered[role=status] a')")
-            .unwrap();
-        // the server's one sentence, from the box's template, and the keyboard's focus with it
-        let said = browser.eval("document.querySelector('#tp-overview .q-answered').textContent").unwrap();
-        let said = said.as_str().unwrap();
-        assert!(
-            said.starts_with("Answered just now: Land it before the rename? sent to ")
-                && said.contains("beta-build")
-                && said.ends_with(" · Read the thread"),
-            "{said}"
-        );
-        browser
-            .wait("document.activeElement?.matches('#tp-overview .q-answered[role=status][aria-live=polite]')")
-            .unwrap();
-
-        assert!(
-            browser
-                .eval("document.querySelector('#tp-overview .q-answered .qa-to > a').getAttribute('href')")
-                .unwrap()
-                .as_str()
-                .unwrap()
-                .contains("thread=step-beta-build#message-"),
-        );
-        // a patch that replaces the exchange hands the focus to the question as now drawn
-        let question = browser
-            .eval("document.querySelector('#tp-overview .q-answered').closest('article.q-card').id")
-            .unwrap();
-        browser
-            .eval("(li => { const fresh = li.cloneNode(false); fresh.innerHTML = '<div class=\"md m-body\">Land it before the rename?</div><ol class=\"m-replies\"><li class=\"m-reply\" id=\"ov-message-999\">Land it now.</li></ol>'; li.replaceWith(fresh); })(document.querySelector('#tp-overview .q-answered').closest('article.q-card'))")
-            .unwrap();
-        browser.wait("document.activeElement?.id === 'ov-message-999'").unwrap();
-        assert!(question.as_str().unwrap().starts_with("ov-message-"), "{question}");
-        let answers: Vec<_> = f
-            .commands
-            .0
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|r| match r {
-                CommandRequest::Reply(reply) => Some((reply.body.clone(), reply.owner)),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(answers, vec![("Land it now.".to_owned(), true)]);
-        // on the inbox the card stays where it was, as the line that says so
-        browser.navigate(&format!("{base}/inbox")).unwrap();
-        browser
-            .wait("document.readyState === 'complete' && document.querySelectorAll('#inbox-items article.q-card').length === 2 && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
-            .unwrap();
-        let badge = browser.eval("document.querySelector('#nav-inbox .count').textContent").unwrap();
-        browser
-            .eval("(a => { a.querySelector('button.q-toggle').click(); const t = a.querySelector('textarea'); t.value = 'Accept it.'; t.form.requestSubmit(); })([...document.querySelectorAll('#inbox-items article.q-card')].at(-1))")
-            .unwrap();
-        browser
-            .wait("!!document.querySelector('#inbox-items article.q-card.q-done .q-answered a')")
-            .unwrap();
-        browser
-            .wait("document.activeElement?.matches('#inbox-items article.q-card.q-done .q-answered')")
-            .unwrap();
-        assert_eq!(
-            browser.eval("document.querySelectorAll('#inbox-items article.q-card').length").unwrap(),
-            2
-        );
-        assert_eq!(
-            browser.eval("document.querySelector('#nav-inbox .count')?.textContent ?? '0'").unwrap(),
-            (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
-        );
-        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
-
 /// Close question confirms where it was pressed, as an answer does: the buttons give way to the
 /// server's "Closed just now: …" line, a polite status that takes the keyboard's focus, so the
 /// next Tab goes on from the question; the nav's count drops.
 #[tokio::test(flavor = "multi_thread")]
 async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_focus() {
     let f = Fixture::new().await;
+    let mut ids = Vec::new();
     for (thread, from, title) in [
         (
             "step-beta-build",
@@ -291,7 +165,7 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         ),
         ("owner", "orchestrator", "Accept revision 3?"),
     ] {
-        stored_messages::stored(
+        let message = stored_messages::stored(
             &f.writer,
             f.id,
             stored_messages::Stored {
@@ -299,13 +173,28 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
                 from,
                 to: Some("owner"),
                 body: "Say which.",
+                ui: Some(r#"root = Stack([Text("<img data-injected src=x onerror=alert(1)>")])"#),
                 title: Some(title),
                 question: true,
                 ..Default::default()
             },
         )
         .await;
+        ids.push(message.id.0);
     }
+    let second = stored_messages::stored(
+        &f.writer,
+        f.id,
+        stored_messages::Stored {
+            thread: "owner",
+            from: "orchestrator",
+            to: Some("owner"),
+            body: "A second whole message on the same thread.",
+            ..Default::default()
+        },
+    )
+    .await;
+    let second_id = second.id.0;
     let router = f.router();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -347,6 +236,19 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
         browser
             .wait("document.readyState === 'complete' && customElements.get('sluice-answer') && [...document.querySelectorAll('#inbox-items .answer')].every(a => a.dataset.drawn)")
             .unwrap();
+        // Two whole cards at once: a constant message-0 anchor must fail this check.
+        let card_ids = browser.eval("[...document.querySelectorAll('#inbox-items article.q-card[id]')].map(a => a.id)").unwrap();
+        let card_ids = card_ids.as_array().unwrap();
+        assert!(card_ids.len() >= 2, "{card_ids:?}");
+        let unique: std::collections::BTreeSet<_> = card_ids.iter().map(|id| id.as_str().unwrap()).collect();
+        assert_eq!(unique.len(), card_ids.len());
+        for id in &ids {
+            assert!(unique.contains(format!("item-{lanes}-{id}").as_str()), "{unique:?}");
+        }
+        assert_eq!(browser.eval("document.querySelector('[data-injected]') === null").unwrap(), true);
+        assert_eq!(browser.eval("[...document.querySelectorAll('#inbox-items .answer')].every(a => a.textContent.includes('<img data-injected'))").unwrap(), true);
+        assert_eq!(browser.eval("document.querySelectorAll('sluice-menu:empty').length").unwrap(), 0);
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
         let badge = browser.eval("document.querySelector('#nav-inbox .count').textContent").unwrap();
         browser.eval("[...document.querySelectorAll('#inbox-items article.q-card:not(.q-done)')].at(-1).querySelector('form.q-close button').click()").unwrap();
         browser
@@ -359,89 +261,16 @@ async fn slow_chromium_closing_a_question_confirms_it_in_place_and_keeps_the_foc
             (badge.as_str().unwrap().parse::<u32>().unwrap() - 1).to_string()
         );
         assert_eq!(closes(&f), 2);
-        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
-    })
-    .await
-    .unwrap();
-    server.abort();
-}
+        browser.navigate(&format!("{base}/projects/id/{lanes}/thread?thread=owner")).unwrap();
+        browser.wait("document.readyState === 'complete' && !!customElements.get('sluice-menu')").unwrap();
+        assert_eq!(browser.eval(&format!("document.querySelectorAll('#message-{}').length", ids[1])).unwrap(), 1);
+        assert_eq!(browser.eval(&format!("document.querySelectorAll('#message-{second_id}').length")).unwrap(), 1);
+        assert_eq!(browser.eval("[...document.querySelectorAll('[id]')].map(e=>e.id).filter((id,i,all)=>all.indexOf(id)!==i)").unwrap(), serde_json::json!([]));
+        browser.navigate(&format!("{base}/history")).unwrap();
+        browser.wait("document.readyState === 'complete' && !!document.querySelector('h1')").unwrap();
+        assert_eq!(browser.eval("document.querySelectorAll('sluice-menu:empty').length").unwrap(), 0);
 
-/// The bug this catches: home's For you drew an answered question's line inside the need
-/// list's grid, in the mark's 14px column, one character a line. Answered in the last ten
-/// minutes, it stays in its place as one line across the row, on a phone and a desktop.
-#[tokio::test(flavor = "multi_thread")]
-async fn slow_chromium_home_keeps_an_answered_question_on_one_line() {
-    let f = Fixture::new().await;
-    for (title, answered) in [
-        ("Land it before the rename?", true),
-        ("Publish it now?", false),
-    ] {
-        let asked = stored_messages::stored(
-            &f.writer,
-            f.id,
-            stored_messages::Stored {
-                thread: "owner",
-                from: "orchestrator",
-                to: Some("owner"),
-                body: title,
-                title: Some(title),
-                question: true,
-                ..Default::default()
-            },
-        )
-        .await;
-        if answered {
-            stored_messages::stored(
-                &f.writer,
-                f.id,
-                stored_messages::Stored {
-                    thread: "owner",
-                    from: "owner",
-                    to: Some("orchestrator"),
-                    body: "Land it now.",
-                    reply: Some(asked.id),
-                    ..Default::default()
-                },
-            )
-            .await;
-        }
-    }
-    let router = f.router();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
-    tokio::task::spawn_blocking(move || {
-        let mut browser = Chrome::open(&format!("http://{addr}/")).unwrap();
-        for width in [390, 1440] {
-            browser.viewport(width, "light").unwrap();
-            browser
-                .wait("document.readyState === 'complete' && !!document.querySelector('.fy-list .q-answered')")
-                .unwrap();
-            let line = browser
-                .eval("(() => { const l = document.querySelector('.fy-list .q-answered'), list = document.querySelector('.fy-list'); const r = l.getBoundingClientRect(); return {width: r.width, list: list.getBoundingClientRect().width, height: r.height, text: l.textContent}; })()")
-                .unwrap();
-            let (w, list, h) = (
-                line["width"].as_f64().unwrap(),
-                line["list"].as_f64().unwrap(),
-                line["height"].as_f64().unwrap(),
-            );
-            assert!(w > list * 0.9 && h < 80.0, "{width}px: {line}");
-            assert!(
-                line["text"].as_str().unwrap().starts_with("Answered "),
-                "{line}"
-            );
-            // the open one is still a need line, its Answer the list's one filled move
-            assert_eq!(
-                browser
-                    .eval("document.querySelectorAll('.fy-list a.btn.primary').length")
-                    .unwrap(),
-                1
-            );
-        }
-        assert_eq!(
-            browser.eval("window.browserErrors ?? []").unwrap(),
-            serde_json::json!([])
-        );
+        assert_eq!(browser.eval("window.browserErrors ?? []").unwrap(), serde_json::json!([]));
     })
     .await
     .unwrap();

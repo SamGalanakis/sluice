@@ -52,7 +52,7 @@ impl ExecutionHost for Fake {
 }
 
 struct Fixture {
-    home: home::ScratchHome,
+    _home: home::ScratchHome,
     client: CoordinatorClient,
     project: ProjectId,
     stop: CancellationToken,
@@ -100,7 +100,7 @@ impl Fixture {
             panic!("project")
         };
         Self {
-            home,
+            _home: home,
             client,
             project: p.project_id,
             stop,
@@ -440,162 +440,6 @@ async fn prune_reports_removed_units_and_each_kept_unit_with_its_holder() {
         serde_json::to_value(&result.kept).unwrap(),
         json!([{"unit":"held","step":"reader"},{"unit":"out","output":"final"}])
     );
-    f.close().await;
-}
-
-#[tokio::test]
-async fn unit_add_and_unit_tag_report_the_units_steps() {
-    let f = Fixture::new().await;
-    let dir = f.home.path().join("recipes");
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("lane.json"),
-        serde_json::to_vec(&json!({"name":"lane","steps":{
-            "{unit}-work":{"run":"fixture.echo","in":{"value":{"default":1}}},
-            "{unit}-land":{"run":"fixture.echo","in":{"value":{"source":"{unit}-work/value"}}}
-        }}))
-        .unwrap(),
-    )
-    .unwrap();
-    let added = edited(
-        f.call(
-            "unit_add",
-            json!({"recipe":"lane","unit":"x","params":{},"after":{},"start":false,"edit":edit("add")}),
-        )
-        .await
-        .unwrap(),
-    );
-    assert_eq!(ids(added.steps.as_deref().unwrap()), ["x-work", "x-land"]);
-    let tagged = edited(
-        f.call(
-            "unit_tag",
-            json!({"unit":"x","add":["arc:a"],"remove":[],"edit":edit("arc")}),
-        )
-        .await
-        .unwrap(),
-    );
-    assert_eq!(tagged.rev, Revision(added.rev.0 + 1));
-    assert_eq!(ids(tagged.steps.as_deref().unwrap()), ["x-work", "x-land"]);
-    let again = edited(
-        f.call(
-            "unit_tag",
-            json!({"unit":"x","add":["arc:a"],"remove":[],"edit":edit("arc")}),
-        )
-        .await
-        .unwrap(),
-    );
-    assert_eq!(again.rev, tagged.rev);
-    assert_eq!(ids(again.steps.as_deref().unwrap()), ["x-work", "x-land"]);
-    f.close().await;
-}
-
-/// The smallest PNG signature the icon sniffer accepts.
-const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
-
-#[tokio::test]
-async fn projects_list_reports_settings_and_icons_from_a_path() {
-    let f = Fixture::new().await;
-    let icon = f.home.root().join("icon.png");
-    std::fs::write(&icon, PNG).unwrap();
-    f.patch(json!([
-        {"op":"step.add","step":"a","spec":{"run":"core.external","outputs":{"ok":"boolean"}}},
-        {"op":"step.add","step":"b","spec":{"run":"core.external","outputs":{"ok":"boolean"}}}
-    ]))
-    .await;
-    f.call(
-        "step_set_output",
-        json!({"step":"a","outputs":{"ok":true},"force":true,"reason":"done"}),
-    )
-    .await
-    .unwrap();
-    f.client
-        .command(request(
-            "project_create",
-            json!({"name":"pictured","description":"has an image","icon":icon,"resources":{"lane":2}}),
-        ))
-        .await
-        .unwrap();
-    f.call(
-        "project_update",
-        json!({"icon":"🧪","description":"text icon"}),
-    )
-    .await
-    .unwrap();
-    let missing = f
-        .client
-        .command(request(
-            "project_create",
-            json!({"name":"nopicture","description":"","icon":"/nonexistent/icon.png","resources":{}}),
-        ))
-        .await
-        .unwrap_err();
-    assert!(
-        missing.to_string().contains("no readable file"),
-        "{missing:?}"
-    );
-    let CommandReply::Projects(list) = f
-        .client
-        .command(CommandRequest::ProjectsList)
-        .await
-        .unwrap()
-    else {
-        panic!("projects")
-    };
-    let list = serde_json::to_value(&list).unwrap();
-    assert_eq!(list.as_array().unwrap().len(), 2);
-    let p = &list[0];
-    assert_eq!(p["name"], "p");
-    assert_eq!(p["description"], "text icon");
-    assert_eq!(p["icon"], json!({"kind":"text","text":"🧪"}));
-    assert_eq!(p["counts"], json!({"pending":1,"succeeded":1}));
-    assert_eq!(p["rev"], f.rev().await);
-    assert_eq!(p["paused"], false);
-    assert_eq!(p["archived"], false);
-    assert!(p.get("resources").is_none());
-    let pictured = &list[1];
-    assert_eq!(pictured["icon"], json!({"kind":"image","type":"image/png"}));
-    assert_eq!(pictured["resources"], json!({"lane":{"capacity":2}}));
-    // An image path on update too, and the listed settings_rev deletes the project.
-    let id = pictured["project_id"].as_str().unwrap().to_owned();
-    let selector = json!({"kind":"id","value":id});
-    f.client
-        .command(request(
-            "project_update",
-            json!({"project":selector,"icon":icon,"archived":true}),
-        ))
-        .await
-        .unwrap();
-    let CommandReply::Projects(list) = f
-        .client
-        .command(CommandRequest::ProjectsList)
-        .await
-        .unwrap()
-    else {
-        panic!("projects")
-    };
-    let pictured = list.iter().find(|p| p.name.as_str() == "pictured").unwrap();
-    assert!(pictured.archived);
-    let stale = f
-        .client
-        .command(request(
-            "project_delete",
-            json!({"project":selector,"confirm_name":"pictured","expected_settings_rev":pictured.settings_rev.0 - 1}),
-        ))
-        .await
-        .unwrap_err();
-    assert!(matches!(stale, PublicError::Conflict { .. }), "{stale:?}");
-    let deleted = f
-        .client
-        .command(request(
-            "project_delete",
-            json!({"project":selector,"confirm_name":"pictured","expected_settings_rev":pictured.settings_rev}),
-        ))
-        .await
-        .unwrap();
-    assert!(matches!(
-        deleted,
-        CommandReply::Deleted { deleted: true, .. }
-    ));
     f.close().await;
 }
 

@@ -302,17 +302,69 @@ async fn p605_typed_ui_reply_is_atomic_and_stale_buttons_conflict() {
     );
     assert_eq!(questions.for_you_rows().len(), 1);
     assert_eq!(questions.nav.inbox, 0);
-    let requests = commands.requests.lock().unwrap();
-    let CommandRequest::Reply(post) = &requests[0] else {
-        panic!()
-    };
-    assert!(post.owner);
-    assert_eq!(post.run, None);
-    assert_eq!(post.to_message, Some(MessageId(question)));
-    assert_eq!(post.project, ProjectSelector::Id(project));
-    let json = serde_json::to_value(&post.answer).unwrap();
-    assert_eq!(json["values"]["value"], 42);
-    assert_eq!(json["values"]["confirmed"], true);
+    {
+        let requests = commands.requests.lock().unwrap();
+        let CommandRequest::Reply(post) = &requests[0] else {
+            panic!()
+        };
+        assert!(post.owner);
+        assert_eq!(post.run, None);
+        assert_eq!(post.to_message, Some(MessageId(question)));
+        assert_eq!(post.project, ProjectSelector::Id(project));
+        let json = serde_json::to_value(&post.answer).unwrap();
+        assert_eq!(json["values"]["value"], 42);
+        assert_eq!(json["values"]["confirmed"], true);
+    }
+    post(&writer,project,serde_json::json!({"needs_reply":true,"title":"<script>bad</script>","body":"<img src=x onerror=alert(1)>","ui":"root = Stack([Text(\"<script>program\")])"})).await;
+    let router = inbox::router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/inbox")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let html = String::from_utf8(
+        to_bytes(response.into_body(), 1 << 20)
+            .await
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(!html.contains("<script>bad"));
+    assert!(!html.contains("<img src=x"));
+    assert!(html.contains("data-ignore-morph"));
+    // its behaviour is the components' (the question's answer, the conversations), every page's
+    assert!(
+        html.contains("<sluice-answer data-preserve-attr=\"data-rocket-host\">"),
+        "{html}"
+    );
+    assert!(html.contains("/static/components.js"));
+    for path in [
+        format!("/projects/id/{project}/thread"),
+        format!("/projects/id/{}/inbox", ProjectId::new()),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(response.status().is_client_error());
+    }
+    assert_eq!(
+        send(
+            &router,
+            &format!("/projects/id/{project}/messages"),
+            serde_json::json!({"body":"","from":"attacker"})
+        )
+        .await
+        .status(),
+        400
+    );
 }
 #[tokio::test]
 async fn p605_invalid_input_answer_stays_open_and_close_bypasses_input() {
@@ -395,60 +447,6 @@ async fn p605_invalid_input_answer_stays_open_and_close_bypasses_input() {
         .await
         .unwrap();
     assert_eq!(value, "7");
-}
-#[tokio::test]
-async fn p605_pages_escape_programs_and_validate_projects_thread_and_reply_payloads() {
-    let (_home, writer, project, state, _) = fixture().await;
-    post(&writer,project,serde_json::json!({"needs_reply":true,"title":"<script>bad</script>","body":"<img src=x onerror=alert(1)>","ui":"root = Stack([Text(\"<script>program\")])"})).await;
-    let router = inbox::router(state);
-    let response = router
-        .clone()
-        .oneshot(
-            Request::builder()
-                .uri("/inbox")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let html = String::from_utf8(
-        to_bytes(response.into_body(), 1 << 20)
-            .await
-            .unwrap()
-            .to_vec(),
-    )
-    .unwrap();
-    assert!(!html.contains("<script>bad"));
-    assert!(!html.contains("<img src=x"));
-    assert!(html.contains("data-ignore-morph"));
-    // its behaviour is the components' (the question's answer, the conversations), every page's
-    assert!(
-        html.contains("<sluice-answer data-preserve-attr=\"data-rocket-host\">"),
-        "{html}"
-    );
-    assert!(html.contains("/static/components.js"));
-    for path in [
-        format!("/projects/id/{project}/thread"),
-        format!("/projects/id/{}/inbox", ProjectId::new()),
-    ] {
-        let response = router
-            .clone()
-            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert!(response.status().is_client_error());
-    }
-    assert_eq!(
-        send(
-            &router,
-            &format!("/projects/id/{project}/messages"),
-            serde_json::json!({"body":"","from":"attacker"})
-        )
-        .await
-        .status(),
-        400
-    );
 }
 
 #[tokio::test]

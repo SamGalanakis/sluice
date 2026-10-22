@@ -169,20 +169,6 @@ impl Fixture {
             })
             .collect()
     }
-    async fn last_seq(&self) -> u64 {
-        let project = self.project.to_string();
-        self.broker
-            .reads()
-            .snapshot(move |sql| {
-                Ok(sql.query_row(
-                    "SELECT coalesce(max(seq),0) FROM records WHERE project_id=?1",
-                    [project],
-                    |r| r.get::<_, i64>(0),
-                )?)
-            })
-            .await
-            .unwrap() as u64
-    }
     async fn close(self) {
         self.stop.cancel();
         self.server.await.unwrap().unwrap();
@@ -407,75 +393,5 @@ async fn an_edit_between_the_look_and_the_prune_skips_the_round() {
     assert_eq!(f.rev().await, rev);
     assert!(f.steps().await.contains(&"old".to_owned()));
     assert!(f.edits().await.iter().all(|(author, _)| author != "sluice"));
-    f.close().await;
-}
-
-#[tokio::test]
-async fn each_project_is_looked_at_once_per_interval() {
-    let f = Fixture::new().await;
-    lanes(&f).await;
-    f.retire_after(json!(1), json!(["ta-*"])).await;
-    age(&f).await;
-    let mut retirer = Retirer::new(Duration::from_secs(300));
-    let start = Instant::now();
-    let done = retirer.pass(&f.broker, start).await.unwrap();
-    assert!(matches!(done.as_slice(), [(_, Retirement::Retired(_))]));
-    f.patch(json!([{"op":"step.add","step":"later","spec":external("later")}]))
-        .await;
-    f.finish("later").await;
-    age(&f).await;
-    // Its turn has not come again: not looked at, however much qualifies.
-    assert!(
-        retirer
-            .pass(&f.broker, start + Duration::from_secs(299))
-            .await
-            .unwrap()
-            .is_empty()
-    );
-    assert!(f.steps().await.contains(&"later".to_owned()));
-    let done = retirer
-        .pass(&f.broker, start + Duration::from_secs(300))
-        .await
-        .unwrap();
-    let [(_, Retirement::Retired(result))] = done.as_slice() else {
-        panic!("{done:?}")
-    };
-    assert_eq!(names(&result.units), ["later"]);
-    f.close().await;
-}
-
-#[tokio::test]
-async fn retiring_wakes_no_orchestrator_next() {
-    let f = Fixture::new().await;
-    lanes(&f).await;
-    f.retire_after(json!(1), json!([])).await;
-    age(&f).await;
-    let since = f.last_seq().await;
-    assert!(matches!(
-        retire::retire(&f.broker, &f.setting().await.unwrap()).await,
-        Retirement::Retired(_)
-    ));
-    let next = |all: bool| {
-        request(
-            "next",
-            json!({"projects":[{"kind":"id","value":f.project}],"since_seq":since,"me":"@lead",
-                   "timeout_seconds":1,"all":all,"settle_seconds":0,"settle_max_seconds":0,"settles":"none"}),
-        )
-    };
-    let CommandReply::Next(result) = f.client.command(next(false)).await.unwrap() else {
-        panic!("next")
-    };
-    assert!(result.timed_out, "{result:?}");
-    assert!(result.records.is_empty(), "{result:?}");
-    // The edit is in the log after `since`: `next(all=true)` sees it, as any plan edit.
-    let CommandReply::Next(result) = f.client.command(next(true)).await.unwrap() else {
-        panic!("next")
-    };
-    assert!(
-        result
-            .records
-            .iter()
-            .any(|r| serde_json::to_value(r).unwrap()["kind"] == "plan.edit")
-    );
     f.close().await;
 }

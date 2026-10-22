@@ -652,7 +652,7 @@ fn selected_home(gate: &support::Gate) -> PathBuf {
 // The push is done when the deploy runs, so a deploy that rolls back leaves main ahead of
 // live: ship fails and says so, naming both.
 #[test]
-fn slow_ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
+fn ship_reports_a_rolled_back_deploy_as_a_failure_with_main_ahead_of_live() {
     let gate = support::Gate::new();
     let prefix = selected_home(&gate);
     let source = scratch_repo(gate.root.path(), SCHEMA);

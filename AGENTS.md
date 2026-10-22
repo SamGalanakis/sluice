@@ -34,7 +34,7 @@
 - Tests start the binaries they test through `env!("CARGO_BIN_EXE_sluice")` (and the other
   `CARGO_BIN_EXE_*`), never a path under `target/`, so each test runs what cargo just built.
 - The only Python left is the fn helper (`python/`), the custom-fn and engine test fixtures,
-  `tests/browser.py`, the shipping scripts and the dependency-inventory generator in `docs/rust/`. Run
+  the shipping scripts and the dependency-inventory generator in `docs/rust/`. Run
   `uv sync --locked` once per checkout: the engine acceptance gates use the repository's
   `.venv/bin/python`. Agent and engine tests need the private tmux: run
   `scripts/build-private-tmux` once per checkout.

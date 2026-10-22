@@ -301,7 +301,7 @@ fn slow_every_legacy_home_converts_with_round_trip_equality_at_every_revision() 
 }
 
 #[test]
-fn slow_each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothing() {
+fn each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_nothing() {
     let defects: Vec<Value> = serde_json::from_str(&read("defects.json")).unwrap();
     for defect in defects {
         let case = defect["case"].as_str().unwrap();
@@ -331,7 +331,7 @@ fn slow_each_defect_blocks_the_conversion_naming_its_project_and_rev_and_writes_
 }
 
 #[test]
-fn slow_a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written() {
+fn a_backup_holding_live_work_is_refused_with_its_counts_and_nothing_is_written() {
     let live = expected("live")["live"].clone();
     let home = ScratchHome::new().unwrap();
     let source = backup_file(home.root(), "live", None);

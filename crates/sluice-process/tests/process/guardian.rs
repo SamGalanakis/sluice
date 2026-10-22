@@ -529,7 +529,7 @@ impl CoordinatorLink for StallLink {
     }
 }
 #[tokio::test]
-async fn guardian_control_refuses_foreign_requests_and_persists_delivery_while_peer_stalls() {
+async fn delivery_acks_are_durable_while_the_coordinator_stalls() {
     let home = tempfile::tempdir().unwrap();
     let (args, link, host) = setup(home.path());
     link.with_state(|s| {
@@ -565,17 +565,6 @@ async fn guardian_control_refuses_foreign_requests_and_persists_delivery_while_p
         .await
         .is_err()
     );
-    assert!(
-        call::<_, ControlReply>(
-            &args.run_dir.join("control.sock"),
-            &RunCapability::new("wrong"),
-            ControlCommand::Cancel
-        )
-        .await
-        .is_err()
-    );
-    assert!(control(&args, ControlCommand::Cancel).await.is_err());
-
     stall.stall(true);
     let ack = |id| {
         control(

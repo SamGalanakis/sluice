@@ -15,7 +15,6 @@ use sluice_model::{
 };
 use sluice_web::mcp::{self, CommandService, McpServer};
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio_util::sync::CancellationToken;
 
 #[derive(Default)]
@@ -222,70 +221,6 @@ async fn exercise(client: &rmcp::service::RunningService<rmcp::RoleClient, Clien
             .unwrap()
             .starts_with("# Types")
     );
-}
-
-/// This test executable is the isolated stdio child, launched by the test below.
-#[test]
-#[ignore = "stdio child entry point"]
-fn stdio_fixture() {
-    if std::env::var_os("SLUICE_STDIO_FIXTURE").is_none() {
-        return;
-    }
-    println!("\nSLUICE_STDIO_READY");
-    use std::io::Write;
-    std::io::stdout().flush().unwrap();
-    tokio::runtime::Runtime::new()
-        .unwrap()
-        .block_on(mcp::serve_stdio(McpServer::new(Arc::new(
-            Commands::default(),
-        ))))
-        .unwrap();
-    std::process::exit(0);
-}
-#[tokio::test]
-async fn rmcp_client_initializes_lists_and_reads_over_process_stdio() {
-    let home = tempfile::tempdir().unwrap();
-    let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "mcp::stdio_fixture", "--ignored", "--nocapture"])
-        .env("SLUICE_STDIO_FIXTURE", "1")
-        .env("SLUICE_HOME", home.path())
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
-    let pid = child.id().unwrap();
-    let stdin = child.stdin.take().unwrap();
-    let mut stdout = BufReader::new(child.stdout.take().unwrap());
-    // Consume the Rust test harness preamble before handing the real pipes to rmcp.
-    loop {
-        let mut line = String::new();
-        assert_ne!(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(10),
-                stdout.read_line(&mut line)
-            )
-            .await
-            .unwrap()
-            .unwrap(),
-            0
-        );
-        if line.trim() == "SLUICE_STDIO_READY" {
-            break;
-        }
-    }
-    let client = client_config().serve((stdout, stdin)).await.unwrap();
-    exercise(&client).await;
-    client.cancel().await.unwrap();
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(10), child.wait())
-            .await
-            .unwrap()
-            .unwrap()
-            .success()
-    );
-    eprintln!("stdio fixture PID {pid} reaped; 47 tools");
 }
 
 #[test]

@@ -35,7 +35,7 @@ fn has_column(dir: &Path) -> bool {
 }
 
 #[tokio::test]
-async fn slow_schema_3_requires_drained_conversion_and_preserves_project_metadata() {
+async fn schema_3_requires_drained_conversion_and_preserves_project_metadata() {
     let scratch = ScratchHome::new().unwrap();
     let home = scratch.path();
     before_the_column(home);
@@ -103,7 +103,7 @@ async fn slow_schema_3_requires_drained_conversion_and_preserves_project_metadat
 }
 
 #[test]
-fn slow_a_restored_backup_from_before_the_column_gains_it() {
+fn a_restored_backup_from_before_the_column_gains_it() {
     let scratch = ScratchHome::new().unwrap();
     let old = scratch.root().join("old");
     before_the_column(&old);

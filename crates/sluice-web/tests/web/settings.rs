@@ -7,9 +7,8 @@ use axum::{
 use futures_util::StreamExt;
 use serde_json::{Value, json};
 use sluice_model::{
-    commands::StepSubmit,
     error::PublicError,
-    ids::{AttemptId, ProjectId, ProjectSelector, Revision, RunId},
+    ids::{ProjectId, ProjectSelector, Revision},
     plan::{FnSignature, SignatureProvider},
     types::Type,
 };
@@ -532,128 +531,6 @@ async fn duplicate_name_and_stale_revision_have_no_partial_effect_or_records() {
         .0,
         308
     );
-}
-#[tokio::test]
-async fn rename_preserves_live_callbacks_next_reader_and_id_stream() {
-    let f = Fixture::new().await;
-    let id = f.id;
-    let run = RunId::new();
-    let attempt = AttemptId::new();
-    f.writer.write(RetrySafety::NonIdempotent,move |tx| {
-  seed::put(tx,id,json!({"steps":{"s":{"run":"core.external"}}}))?;
-  tx.sql().execute("UPDATE steps SET status='running',generation=1,work_generation=1,run_ids=?2,owner='@lead' WHERE project_id=?1 AND step_id='s'",(id.to_string(),json!([run]).to_string()))?;
-  tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) VALUES (?1,?2,'s',1,1,'executing',?3,'hash','now')",(attempt.to_string(),id.to_string(),json!({"declared":{"result":"string"}}).to_string()))?;
-  tx.sql().execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,generation,work_generation,created_at) VALUES (?1,?2,?3,'s',1,1,'now')",(run.to_string(),id.to_string(),attempt.to_string()))?;tx.changed(Some(id),"status");Ok(())
- }).await.unwrap();
-    let response = f
-        .router()
-        .oneshot(
-            Request::builder()
-                .uri(format!("{}/stream", f.path()))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), 200);
-    let mut stream = response.into_body().into_data_stream();
-    let initial = stream.next().await.unwrap().unwrap();
-    assert!(String::from_utf8_lossy(&initial).contains("datastar-patch"));
-    let w = f.writer.clone();
-    let reads = f.state.dashboard.reads.clone();
-    let next = tokio::spawn(async move {
-        sluice_runtime::watch::next(
-            &w,
-            &reads,
-            sluice_runtime::watch::NextOptions {
-                projects: vec![id],
-                settle: Duration::ZERO,
-                timeout: Some(Duration::from_secs(3)),
-                me: Some("@lead".into()),
-                ..Default::default()
-            },
-        )
-        .await
-    });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let ready = f
-                .state
-                .dashboard
-                .reads
-                .snapshot(move |c| {
-                    Ok(sluice_store::messages::reader(
-                        c,
-                        id,
-                        "@lead",
-                        sluice_store::messages::ORCHESTRATOR_STREAM,
-                        "",
-                    )?
-                    .heartbeat_at
-                    .is_some())
-                })
-                .await
-                .unwrap();
-            if ready {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .unwrap();
-    assert!(
-        f.details(&[("name", "second")])
-            .await
-            .contains("role=\"status\">Saved.</p>")
-    );
-    f.writer.write(RetrySafety::NonIdempotent,move |tx| {
-  assert_eq!(sluice_store::attempts::step_submit(tx,StepSubmit {project:id,step:"s".parse().unwrap(),run,outputs:serde_json::from_value(json!({"result":"still live"}))?,author:Some("worker".into())})?,Some(1));
-  let message:sluice_model::commands::Ask=serde_json::from_value(json!({"project":{"kind":"id","value":id},"to":"orchestrator","body":"callback after rename","run":run}))?;
-  sluice_store::messages::post(tx,message.try_into()?,&sluice_store::messages::NoPlanInputs)?;Ok(())
- }).await.unwrap();
-    let next = next.await.unwrap().unwrap();
-    assert!(!next.timed_out);
-    assert!(
-        serde_json::to_string(&next)
-            .unwrap()
-            .contains("callback after rename")
-    );
-    let mut wire = String::new();
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while !wire.contains("second") {
-            wire.push_str(&String::from_utf8_lossy(
-                &stream.next().await.unwrap().unwrap(),
-            ));
-        }
-    })
-    .await
-    .unwrap();
-    assert!(wire.contains(&id.to_string()));
-    let state = f
-        .state
-        .dashboard
-        .reads
-        .snapshot(move |c| {
-            Ok((
-                c.query_row(
-                    "SELECT run_id FROM runs WHERE project_id=?1",
-                    [id.to_string()],
-                    |r| r.get::<_, String>(0),
-                )?,
-                sluice_store::messages::reader(
-                    c,
-                    id,
-                    "@lead",
-                    sluice_store::messages::ORCHESTRATOR_STREAM,
-                    "",
-                )?,
-            ))
-        })
-        .await
-        .unwrap();
-    assert_eq!(state.0, run.to_string());
-    assert!(state.1.cursor.0 > 0);
 }
 #[tokio::test]
 async fn dashboard_deletion_archives_first_and_requires_current_revision_and_no_live_work() {
