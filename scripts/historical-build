@@ -31,25 +31,25 @@ def locked(root, key):
 
 
 def selected_revisions():
-    selected = set()
+    selected = {}
     for sha in git('rev-list', '--first-parent', 'HEAD').splitlines():
         source = git('show', sha + ':crates/sluice-store/src/schema.rs')
-        if (not any(schema == 1 for schema, _ in selected)
+        if (1 not in selected
                 and 'pub const SCHEMA_VERSION: i64 = 1;' in source
                 and git('ls-tree', sha, 'crates/sluice-model/src/plan.rs')):
-            selected.add((1, sha))
-        if (not any(schema == 3 for schema, _ in selected)
+            selected[1] = sha
+        if (3 not in selected
                 and 'pub const SCHEMA_VERSION: i64 = 3;' in source):
-            selected.add((3, sha))
+            selected[3] = sha
         if len(selected) == 2:
             break
     if len(selected) != 2:
-        sys.exit('historical-build: need schema-1 and schema-3 ancestors before pruning')
-    return {sha for _, sha in selected}
+        sys.exit('historical-build: need schema-1 and schema-3 ancestors')
+    return selected
 
 
 def prune(root, dry):
-    selected = selected_revisions()
+    selected = set(selected_revisions().values())
     if not root.exists():
         return
     # Builders hold a shared lease through publication. Pruning takes an exclusive one;
@@ -145,10 +145,13 @@ def main():
     builder = commands.add_parser('build')
     builder.add_argument('--revision', required=True)
     builder.add_argument('--harness-schema', type=int)
+    commands.add_parser('revisions', help='print the cutover scenarios’ selected revisions by schema')
     pruner = commands.add_parser('prune', help='run only when no durability gates are active')
     pruner.add_argument('--dry-run', action='store_true')
     args = parser.parse_args()
-    if args.command == 'prune':
+    if args.command == 'revisions':
+        print(json.dumps(selected_revisions(), sort_keys=True))
+    elif args.command == 'prune':
         prune(args.cache_root, args.dry_run)
     else:
         print(build(args.cache_root.resolve(), args.revision, args.harness_schema))

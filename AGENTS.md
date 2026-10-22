@@ -21,7 +21,7 @@
   a per-key file lock and publish a completed staging directory by rename; ship cleanup protects
   the cache. When no durability gates are active, run `scripts/historical-build prune --dry-run`
   then `scripts/historical-build prune` to remove revisions no longer selected by `old_revision()`
-  or the normalized schema-3 cutover scenario, plus interrupted staging directories. Lock files
+  (the shared `scripts/historical-build revisions` selector), plus interrupted staging directories. Lock files
   stay in place so concurrent waiters always share one inode.
 - Timing seams are direct Rust APIs, never home settings: `Notifier::with_retry_timing`,
   `Claude::with_delivery_timing`, `Devin::with_delivery_timing` and

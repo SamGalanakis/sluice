@@ -188,7 +188,8 @@ interrupted builds are never cache hits. This caches runnable artifacts, without
 hardlinking lane Cargo targets. Ship's temporary-target cleanup preserves this cache.
 With no durability gates active, `scripts/historical-build prune [--dry-run]` removes revisions
 no longer selected by the schema-1 and schema-3 cutover scenarios and abandoned staging
-directories; it preserves the lock files.
+directories; it preserves the lock files. The scenarios and pruning share the selection
+reported by `scripts/historical-build revisions`.
 
 A failure stopping the old services (step 5) leaves the installation fenced and says so. A
 failure after the stop, in steps 6 to 9, rolls back when the previous selection serves the same

@@ -73,24 +73,24 @@ fn wait_for(what: &str, limit: Duration, mut predicate: impl FnMut() -> bool) {
     }
 }
 
-// The schema-1 binary the home runs before the cutover.
-fn old_revision() -> &'static str {
-    static REVISION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    REVISION.get_or_init(|| {
-        let repo = repo();
-        git(&repo, &["rev-list", "--first-parent", "HEAD"])
-            .lines()
-            .find(|sha| {
-                git(
-                    &repo,
-                    &["show", &format!("{sha}:crates/sluice-store/src/schema.rs")],
-                )
-                .contains("pub const SCHEMA_VERSION: i64 = 1;")
-                    && !git(&repo, &["ls-tree", sha, "crates/sluice-model/src/plan.rs"]).is_empty()
-            })
-            .expect("cutover tests need a schema-1 ancestor with the legacy compiler")
-            .to_owned()
-    })
+// The same selection drives both the fixtures and cache pruning.
+fn old_revision(schema: u32) -> &'static str {
+    static REVISIONS: std::sync::OnceLock<BTreeMap<u32, String>> = std::sync::OnceLock::new();
+    REVISIONS
+        .get_or_init(|| {
+            let output = Command::new(repo().join("scripts/historical-build"))
+                .arg("revisions")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "historical revisions: {}",
+                text(&output)
+            );
+            serde_json::from_slice(&output.stdout).unwrap()
+        })
+        .get(&schema)
+        .expect("a historical cutover revision for the schema")
 }
 
 fn historical_build(sha: &str, harness_schema: Option<u32>) -> PathBuf {
@@ -149,6 +149,13 @@ fn historical_build_publishes_complete_artifacts_across_worktrees() {
     let sha = git(&checkout, &["rev-parse", "HEAD"]);
     std::fs::write(&schema, "pub const SCHEMA_VERSION: i64 = 3;").unwrap();
     git(&checkout, &["commit", "-qam", "Schema three"]);
+    let normalized = git(&checkout, &["rev-parse", "HEAD"]);
+    let revisions = Command::new(&script).arg("revisions").output().unwrap();
+    assert!(revisions.status.success(), "{}", text(&revisions));
+    assert_eq!(
+        serde_json::from_slice::<Value>(&revisions.stdout).unwrap(),
+        json!({"1": sha, "3": normalized})
+    );
     let other = root.join("other");
     git(
         &checkout,
@@ -351,7 +358,7 @@ struct Releases {
 }
 impl Releases {
     fn new() -> Self {
-        Self::from_old(old_revision(), 1)
+        Self::from_old(old_revision(1), 1)
     }
     fn from_old(old_sha: &str, old_schema: u32) -> Self {
         let root = tempfile::tempdir_in(target().join("tmp")).unwrap();
@@ -2030,18 +2037,8 @@ fn slow_ship_and_deploy_refuse_schema_changes_before_build_or_push() {
 
 #[test]
 fn slow_cutover_preserves_normalized_plans_and_rehearses_the_current_schema() {
-    let old_sha = git(&repo(), &["rev-list", "--first-parent", "HEAD"])
-        .lines()
-        .find(|sha| {
-            git(
-                &repo(),
-                &["show", &format!("{sha}:crates/sluice-store/src/schema.rs")],
-            )
-            .contains("pub const SCHEMA_VERSION: i64 = 3;")
-        })
-        .expect("a schema-3 ancestor")
-        .to_owned();
-    let mut scratch = Scratch::with_releases(|_| Vec::new(), Releases::from_old(&old_sha, 3));
+    let mut scratch =
+        Scratch::with_releases(|_| Vec::new(), Releases::from_old(old_revision(3), 3));
     scratch.tool("project_create", json!({"name":"p"}));
     scratch.tool("plan_edit", json!({"project":"p","rev":1,"reason":"ordered normalized plan","ops":[
         {"op":"input.put","name":"n","declaration":{"type":"int","doc":"preserved input"}},
