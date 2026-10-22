@@ -142,7 +142,7 @@ fn executor() -> ProcessIdentity {
         cgroup: "/fake/payload".into(),
     }
 }
-async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once(
+async fn claim_replay_preserves_identity_and_only_ack_consumes_backlog(
     b: Coordinator<Fake>,
     f: Fake,
     p: ProjectId,
@@ -217,7 +217,7 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once(
         })
         .await
         .unwrap();
-    assert_eq!(cursor, l.assigned.through.0);
+    assert_eq!(cursor, 0, "process start is not message acceptance");
     b.guardian(
         C::DeliverAck {
             identity: l.identity.clone(),
@@ -230,6 +230,21 @@ async fn claim_replay_is_same_identity_only_and_start_consumes_backlog_once(
     )
     .await
     .unwrap();
+    let cursor = b
+        .reads()
+        .snapshot(move |sql| {
+            Ok(sql.query_row(
+                "SELECT delivery_cursor FROM steps WHERE project_id=?1",
+                [p.to_string()],
+                |r| r.get::<_, i64>(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        cursor, l.assigned.through.0,
+        "acknowledgement consumes the backlog"
+    );
     b.complete(CompletionJournal {
         protocol: 1,
         limits: l.limits,
@@ -1373,7 +1388,7 @@ async fn cancelled_start_records_history_without_dispatch_and_adoption_settles()
         Ok(sql.query_row("SELECT a.phase,s.delivery_cursor,json_array_length(json_extract(a.request,'$.runtime_starts')) FROM runs r JOIN attempts a USING(attempt_id) JOIN steps s ON s.project_id=r.project_id AND s.step_id=r.step_id WHERE r.run_id=?1", [run.to_string()], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?)
     }).await.unwrap();
     assert_eq!(phase, "terminal");
-    assert_eq!(cursor, l.assigned.through.0);
+    assert_eq!(cursor, 0, "a cancelled start never accepted its backlog");
     assert_eq!(starts, 1);
     assert!(!dir.join("completion.json").exists());
     assert_eq!(f.0.lock().unwrap().len(), 1);
@@ -2300,8 +2315,7 @@ async fn messages_edits_and_index_refusals() {
 #[tokio::test]
 async fn run_identity_delivery_and_replay() {
     let (_home, b, f, mut p) = setup().await;
-    claim_replay_is_same_identity_only_and_start_consumes_backlog_once(b.clone(), f.clone(), p)
-        .await;
+    claim_replay_preserves_identity_and_only_ack_consumes_backlog(b.clone(), f.clone(), p).await;
     b.release_scheduler("s".into()).await.unwrap();
     f.0.lock().unwrap().clear();
     p = fresh_project(&b, 1).await;
