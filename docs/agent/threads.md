@@ -75,8 +75,10 @@ speaks to your unit's owner from a run.
 ## Who you are
 Every session names itself before it speaks: `@<name>`, a lowercase letter, then lowercase
 letters, digits or `-` (at most 40), for example `@lash-f4`. Pass `me="@lash-f4"` on your first
-call; over MCP that binds your session and every later call defaults to it (a different `me`
-on the same session is refused). From a shell, set `SLUICE_ME=@lash-f4` (or pass `--me`). The
+MCP call: that binds your session and every later call defaults to it (a different `me` on
+the same session is refused). For HTTP (`POST /api/tools/<name>`), give `me` on every request
+that needs your name. Each call is independent: omitting `me` leaves it unnamed, and no call
+can bind another caller's identity. From a shell, set `SLUICE_ME=@lash-f4` (or pass `--me`). The
 name is your identity, not your connection: a successor that reuses it carries on with your
 units and your messages.
 
@@ -85,7 +87,8 @@ units and your messages.
 - `owner` is the person at the dashboard; only the dashboard speaks as it. `orchestrator` is
   no longer a name or an address: messages from before sessions named themselves keep it.
 - A worker run speaks as its step; the coordinator's own alerts come from `sluice`.
-- Your writes are authored by your name, so the plan's history says which session did what.
+- Your writes default to your name as author, so the plan's history says which session did
+  what. An unnamed HTTP edit uses the ordinary author default, without inheriting a name.
 
 **Owners.** Every unit has an owner, who answers its workers: an `@session`, `owner` (the
 person), or nobody. A unit you add is yours: `step_add`, `unit_add` and `plan_edit` with your

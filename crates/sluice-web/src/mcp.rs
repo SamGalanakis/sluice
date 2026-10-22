@@ -129,7 +129,8 @@ impl McpServer {
     }
 }
 
-/// The HTTP tool endpoint uses the same command decoder and reply shaping as MCP.
+/// The stateless HTTP tool endpoint shares MCP decoding and replies, with a fresh identity
+/// scope for each call rather than a binding shared with other HTTP callers.
 pub async fn call_http(
     server: &McpServer,
     name: &str,
@@ -169,7 +170,7 @@ pub async fn call_http(
         .as_object()
         .expect("argument map")
         .clone();
-    let result = server.call(name, value, Some("http")).await;
+    let result = server.session().call(name, value, Some("http")).await;
     if result.is_error == Some(true) {
         let error: PublicError =
             serde_json::from_value(result.structured_content.expect("structured public error"))

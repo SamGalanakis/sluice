@@ -20,14 +20,21 @@ use sluice_web::{
     mcp::CommandService,
     views::{DashboardState, EmptyCatalog, PageState},
 };
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 use tower::ServiceExt;
 
-struct Commands;
+#[derive(Default)]
+struct Commands(Mutex<Vec<CommandRequest>>);
 impl CommandService for Commands {
     fn command(&self, request: CommandRequest) -> BoxFuture<'_, Result<CommandReply, PublicError>> {
         Box::pin(async move {
+            // Use the coordinator's speaker policy, recording only accepted commands.
+            if let CommandRequest::Say(say) = &request {
+                sluice_store::messages::Speaker::of(say.owner, say.run, say.me.as_deref())
+                    .map_err(|error| error.into_public(true))?;
+            }
+            self.0.lock().unwrap().push(request.clone());
             match request {
                 CommandRequest::ProjectsList => Ok(CommandReply::Projects(vec![])),
                 CommandRequest::PlanGet { .. } => Err(PublicError::NotFound {
@@ -42,6 +49,7 @@ struct Fixture {
     _home: tempfile::TempDir,
     writer: Writer,
     app: Router,
+    commands: Arc<Commands>,
     id: ProjectId,
     stop: CancellationToken,
 }
@@ -72,11 +80,13 @@ impl Fixture {
             Arc::new(EmptyCatalog),
         ));
         let stop = CancellationToken::new();
-        let app = http::router(pages, Arc::new(Commands), stop.clone());
+        let commands = Arc::new(Commands::default());
+        let app = http::router(pages, commands.clone(), stop.clone());
         Self {
             _home: home,
             writer,
             app,
+            commands,
             id: project.project_id,
             stop,
         }
@@ -114,6 +124,91 @@ async fn json_body(response: axum::response::Response) -> Value {
             .unwrap(),
     )
     .unwrap()
+}
+
+/// HTTP calls never inherit another caller's identity, including the default edit author.
+#[tokio::test]
+async fn each_http_tool_call_has_its_own_identity() {
+    let fixture = Fixture::new().await;
+    for me in [Some("@a"), Some("@b"), None] {
+        let mut args = json!({"project":"web","to":"owner","body":"hello"});
+        if let Some(me) = me {
+            args["me"] = json!(me);
+        }
+        let response = fixture
+            .request(
+                "POST",
+                "/api/tools/say",
+                "localhost",
+                None,
+                Some("application/json"),
+                Body::from(args.to_string()),
+            )
+            .await;
+        let status = response.status();
+        let body = json_body(response).await;
+        if me.is_some() {
+            assert_eq!(status, StatusCode::OK, "{me:?}: {body}");
+        } else {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+            assert_eq!(body["error"], "invalid");
+            assert!(
+                body["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("name this session")
+            );
+        }
+    }
+    let speakers: Vec<_> = fixture
+        .commands
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|request| match request {
+            CommandRequest::Say(say) => Some(say.me.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(speakers, [Some("@a".into()), Some("@b".into())]);
+
+    for author in [None, Some("owner")] {
+        let mut args = json!({"project":"web","description":"edited"});
+        if let Some(author) = author {
+            args["author"] = json!(author);
+        }
+        let response = fixture
+            .request(
+                "POST",
+                "/api/tools/project_update",
+                "localhost",
+                None,
+                Some("application/json"),
+                Body::from(args.to_string()),
+            )
+            .await;
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+    let authors: Vec<_> = fixture
+        .commands
+        .0
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|request| match request {
+            CommandRequest::ProjectUpdate(update) => Some(update.author.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        authors,
+        [
+            Some(sluice_web::mcp::author_of(None, None, Some("http"), "mcp")),
+            Some("owner".into()),
+        ]
+    );
+    fixture.writer.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -785,7 +880,11 @@ async fn http_refusals_assets_and_shutdown() {
             ReadPool::open(fixture._home.path(), 2).unwrap(),
             Arc::new(Unavailable),
         ));
-        let app = http::router(pages, Arc::new(Commands), CancellationToken::new());
+        let app = http::router(
+            pages,
+            Arc::new(Commands::default()),
+            CancellationToken::new(),
+        );
         for path in [
             "/".to_owned(),
             format!("/projects/id/{id}"),

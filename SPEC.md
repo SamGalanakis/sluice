@@ -1685,10 +1685,11 @@ name steps, the owner "you".
 `sluice tool`, `sluice next` and `sluice drain`, except in a run (`SLUICE_RUN_ID` set), which
 speaks as its step; the MCP session's binding. The first `me` an MCP session gives binds that
 session, its later calls default to it, and a different `me` on it is `invalid` ("this MCP
-session is @lead; a session keeps one name"). The name is the identity, not the connection: a
-successor that reuses `@name` inherits its units and what is addressed to it. With no name a
-session reads freely, but `ask`, `say`, `reply` and a `step_retry` with a `message` are
-refused: `invalid`, "name this session: pass me=@name or set SLUICE_ME". A `me` that is not a
+session is @lead; a session keeps one name"). HTTP tool calls have no session binding:
+`me` applies only to that request; without `me` or a run, the caller is unnamed. The name is
+the identity, not the connection: a successor that reuses `@name` inherits its units and what
+is addressed to it. With no name a session reads freely, but `ask`, `say`, `reply` and a
+`step_retry` with a `message` are refused: `invalid`, "name this session: pass me=@name or set SLUICE_ME". A `me` that is not a
 session name is `invalid` and says how to write one; `owner` (only the dashboard speaks as the
 owner), `orchestrator` and `sluice` are never names. A run that names `me` is refused: it
 speaks as its step. A write's `author` defaults to the session's name (§12.3).
@@ -1969,8 +1970,11 @@ against the plan.
   server's instructions are the `instructions` docs topic; every topic is also a resource
   `sluice://docs/<topic>`.
 - **HTTP**: `POST /api/tools/<name>` with a JSON object body, the same flat arguments as MCP;
-  the reply is the tool's JSON, errors mapped to 400 (`bad_request`, `invalid`), 404, 409
-  (`conflict`, `cursor_expired`), 503 (`busy`), 408 (`cancelled`) and 500.
+  each call has a fresh identity scope. Pass `me` on every request that needs a name: it
+  never binds another request, even on the same connection. Without `me` (or a run), the
+  caller is unnamed: `ask`, `say` and `reply` are refused, and edits use the ordinary
+  author default (§12.3). The reply is the tool's JSON, errors mapped to 400 (`bad_request`,
+  `invalid`), 404, 409 (`conflict`, `cursor_expired`), 503 (`busy`), 408 (`cancelled`) and 500.
 - **MCP over stdio**: `sluice mcp` serves the same tools, instructions and resources on its
   stdin and stdout, through the home's coordinator (started when nothing answers).
 - **CLI**: `sluice tool <name> '<json>'`, or `--field value` flags (§14).

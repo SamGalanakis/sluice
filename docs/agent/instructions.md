@@ -9,12 +9,14 @@ real handoff. Agents do their own mechanics (branches, merges, formatting). Chan
 you learn. Read `docs("composing")` before your first plan.
 
 Name yourself first: pass `me="@<name>"` (a lowercase letter, then lowercase letters, digits
-or `-`; for example `@lash-f4`) on your first call. It binds this MCP session: every later call
-speaks, edits and waits as you, so the plan's history and the messages say which session did
-what (from a shell, set `SLUICE_ME=@lash-f4`). Without a name you may read, but `ask`, `say` and
-`reply` are refused. `owner` is the person, and `orchestrator` is no longer anyone's name. A
-unit you add is yours: its workers' questions come to you, and `next` and `log_wait` show you
-your own units and messages (`scope="all"` for everyone's). Take over a unit with
+or `-`; for example `@lash-f4`). Over MCP, pass it on your first call: it binds that session,
+so every later call speaks, edits and waits as you; a different name on that session is
+refused. Over HTTP (`POST /api/tools/<name>`), pass `me` on every call that needs your name:
+each request has its own identity scope and never inherits a previous caller's name. From a
+shell, set `SLUICE_ME=@lash-f4`. Without a name you may read, but `ask`, `say` and `reply` are
+refused, and edits use the ordinary author default. `owner` is the person, and `orchestrator`
+is no longer anyone's name. A unit you add is yours: its workers' questions come to you, and
+`next` and `log_wait` show you your own units and messages (`scope="all"` for everyone's). Take over a unit with
 `unit_claim(project, unit)` (a stopped session's units: `unit_claim(project,
 owned_by="@old-name")`), hand one on
 with `unit_release(project, unit, to="@peer")` (`docs("threads")`, Who you are).
