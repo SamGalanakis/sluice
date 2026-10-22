@@ -5,6 +5,9 @@ set -euo pipefail
 script_repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
 exec python3 - "$script_repo" "$@" <<'PY'
 import argparse, json, os, pathlib, re, runpy, shutil, sqlite3, subprocess, sys, tempfile, time, urllib.request
+# A lane can have no bus environment; adoption still queries the real user manager.
+runtime = '/run/user/%d' % os.getuid()
+os.environ.update(XDG_RUNTIME_DIR=runtime, DBUS_SESSION_BUS_ADDRESS='unix:path=' + runtime + '/bus')
 parser = argparse.ArgumentParser(prog='scripts/ship', description=
     'Rebase REF onto origin/main, run the shared gate with slow groups selected by changes, push it to main, deploy origin/main to the selected home and check '
     'that every live run was adopted.')

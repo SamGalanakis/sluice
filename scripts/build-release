@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
-exec python3 - "$repo" "$@" <<'PY'
+exec /usr/bin/python3 -I - "$repo" "$@" <<'PY'
 import hashlib, json, os, pathlib, shutil, subprocess, sys, tempfile
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
+from deploy_host import enter
+enter(pathlib.Path(sys.argv[1]) / 'scripts/build-release', sys.argv[2:])
 repo = pathlib.Path(sys.argv[1])
 if len(sys.argv) != 3:
     sys.exit('Usage: scripts/build-release <prefix>')
@@ -22,7 +25,7 @@ sha = os.environ.get('SLUICE_BUILD_GIT_SHA') or subprocess.check_output(['git', 
 # One shared Cargo feature graph; all build outputs are inside the explicit prefix.
 build_env = os.environ.copy()
 for key in ('CARGO_TARGET_DIR', 'CARGO_BUILD_TARGET_DIR'): build_env.pop(key, None)
-subprocess.run(['cargo', 'build', '--target-dir', str(prefix / '.build/target'), '--workspace', '--bins', '--release', '--locked'], cwd=repo, env=build_env, check=True)
+subprocess.run(['cargo', 'build', '-j', '8', '--target-dir', str(prefix / '.build/target'), '--workspace', '--bins', '--release', '--locked'], cwd=repo, env=build_env, check=True)
 def fsync_tree(root):
     for path in root.rglob('*'):
         if path.is_file() and not path.is_symlink():

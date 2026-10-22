@@ -616,7 +616,14 @@ fn scratch_repo(root: &Path, schema: i64) -> PathBuf {
     let dir = root.join("repo");
     std::fs::create_dir_all(dir.join("scripts")).unwrap();
     std::fs::create_dir_all(dir.join("crates/sluice-store/src")).unwrap();
-    for script in ["ship", "gate", "deploy", "build-release", "compat-check"] {
+    for script in [
+        "ship",
+        "gate",
+        "deploy",
+        "build-release",
+        "compat-check",
+        "deploy_host.py",
+    ] {
         std::fs::copy(
             repo().join("scripts").join(script),
             dir.join("scripts").join(script),

@@ -7,8 +7,11 @@
 # must refuse it without changing it (docs/design/plan-rows.md §10.8).
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
-exec python3 - "$repo" "$@" <<'PY'
-import argparse, json, os, pathlib, shutil, signal, sqlite3, subprocess, sys, tempfile, time, uuid
+exec /usr/bin/python3 -I - "$repo" "$@" <<'PY'
+import argparse, json, os, pathlib, shutil, shlex, signal, sqlite3, subprocess, sys, tempfile, time, uuid
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
+from deploy_host import enter
+enter(pathlib.Path(sys.argv[1]) / 'scripts/compat-check', sys.argv[2:])
 parser = argparse.ArgumentParser(prog='scripts/compat-check', description=
     'Start the candidate release on a copy of the home and run the agent CLI calls with every '
     'release a live run is pinned to, plus the selected release and the candidate itself.')
@@ -98,10 +101,15 @@ def strays():
     # Anything a candidate or CLI spawned in turn carries the scratch home in its environment.
     found = []
     marker = b'SLUICE_HOME=' + os.fsencode(copy)
+    group = pathlib.Path('/proc/self/cgroup').read_bytes()
     for proc in pathlib.Path('/proc').iterdir():
         if not proc.name.isdecimal() or int(proc.name) == os.getpid(): continue
         try:
-            if marker in (proc / 'environ').read_bytes().split(b'\0'): found.append((int(proc.name), start_time(int(proc.name))))
+            # With --copy, the invoking launcher can carry the same home. Only this
+            # service's descendants are ours; never kill a controller in the caller's unit.
+            if ((proc / 'cgroup').read_bytes() == group
+                    and marker in (proc / 'environ').read_bytes().split(b'\0')):
+                found.append((int(proc.name), start_time(int(proc.name))))
         except OSError: pass
     return found
 def cleanup():
@@ -179,7 +187,7 @@ def start_coordinator(binary, name):
     return child, record
 def log_tail(name):
     text = (scratch / (name + '.log')).read_text(errors='replace').strip().splitlines()
-    return ('; '.join(text[-3:]) if text else 'no output')
+    return ('\n'.join(text[-200:]) if text else 'no output')
 def await_coordinator(binary, child, name):
     deadline = time.monotonic() + max(args.timeout, 120)
     while time.monotonic() < deadline:
@@ -332,30 +340,10 @@ def compatible():
     print('compat: candidate %s on a copy of %s (scratch %s)' % (candidate.name, home, scratch), flush=True)
     print('compat: %d live run(s) pinned to %d release(s)' % (len(runs), len({r[1] for r in runs})), flush=True)
 
-    # The candidate's coordinator, a plain child of this script.
-    log = (scratch / 'coordinator.log').open('wb')
-    coordinator = subprocess.Popen([str(candidate / 'bin/sluice'), 'coordinator'], env=env, stdin=subprocess.DEVNULL,
-        stdout=log, stderr=log, start_new_session=True, cwd=scratch)
-    log.close()
-    coordinator_record = (coordinator.pid, start_time(coordinator.pid))
-    started.append(coordinator_record)
-    def coordinator_tail():
-        text = (scratch / 'coordinator.log').read_text(errors='replace').strip().splitlines()
-        return ('; '.join(text[-3:]) if text else 'no output')
-    deadline = time.monotonic() + max(args.timeout, 120)
-    ready = None
-    while time.monotonic() < deadline:
-        if coordinator.poll() is not None:
-            ready = 'candidate coordinator exited %d: %s' % (coordinator.returncode, coordinator_tail())
-            break
-        if (copy / 'coordinator.sock').exists():
-            probe = cli(candidate / 'bin/sluice', 'tool', 'rpc', '{"command":"projects_list"}', timeout=10)
-            if probe is not None and probe.returncode == 0:
-                ready = 'ok'
-                break
-        time.sleep(.2)
+    coordinator, coordinator_record = start_coordinator(candidate / 'bin/sluice', 'coordinator')
+    ready = await_coordinator(candidate / 'bin/sluice', coordinator, 'coordinator')
     if ready != 'ok':
-        print('compat: FAILED: ' + (ready or 'candidate coordinator did not answer'), flush=True)
+        print('compat: FAILED: ' + ready, flush=True)
         sys.exit(1)
     if args.mark_schema is not None:
         with sqlite3.connect(str(copy / 'sluice.db'), timeout=30) as marked:
@@ -392,7 +380,7 @@ def compatible():
                 cells[command] = ('FAIL', 'timeout after %gs' % args.timeout) if proc is None else classify(command, proc)
         results[release] = cells
     if not alive(coordinator_record):
-        results.setdefault(str(candidate), {})['coordinator'] = ('FAIL', 'crash: candidate coordinator exited: ' + coordinator_tail())
+        results.setdefault(str(candidate), {})['coordinator'] = ('FAIL', 'crash: candidate coordinator exited: ' + log_tail('coordinator'))
 
     # The table: release x command.
     header = ['release', 'role', 'runs', *commands]
@@ -444,6 +432,19 @@ try:
             shutil.copytree(source, copy / tree, symlinks=True, ignore=skip)
 
     sys.exit(check_incompatible() if incompatible else compatible())
+except BaseException as error:
+    if not isinstance(error, SystemExit) or error.code not in (None, 0):
+        for log in sorted(scratch.glob('*.log')):
+            print('compat: %s (last 200 lines):' % log.name, file=sys.stderr, flush=True)
+            print('\n'.join(log.read_text(errors='replace').splitlines()[-200:]) or '(empty)',
+                  file=sys.stderr, flush=True)
+        rerun = ['/usr/bin/env', 'SLUICE_HOME=' + str(home), 'SLUICE_INSTALL_DIR=' + str(install),
+                 *[key + '=' + env[key] for key in ('SLUICE_TEST', 'SLUICE_FIXTURE') if key in env],
+                 str(pathlib.Path(sys.argv[1]) / 'scripts/compat-check'), *sys.argv[2:],
+                 '--release', str(candidate), '--prefix', str(prefix)]
+        print('compat: rerun: cd %s && %s' % (shlex.quote(os.getcwd()), shlex.join(rerun)),
+              file=sys.stderr, flush=True)
+    raise
 finally:
     cleanup()
 PY

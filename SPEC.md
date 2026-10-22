@@ -90,7 +90,20 @@ A home that is not the installation's selected home refuses admission (`maintena
 selected home`). Without a release and without `SLUICE_INSTALL_DIR` (a source build), the
 installation is the sibling directory `<home>.sluice-install`.
 
-**`scripts/build-release <prefix>`** runs `cargo build --workspace --bins --release --locked`
+Shipping scripts (`deploy`, `build-release`, `compat-check`, `cutover-rehearse`) run in a
+collected transient user service under `app.slice`, independent of the invoking lane's memory,
+CPU and task caps. The launcher uses `/run/user/<uid>/bus` even if the caller has no D-Bus
+environment; ship supplies the same address to its gate and adoption checks. The service receives an explicit
+environment: the account home, UTF-8 locale,
+PATH (`~/.cargo/bin`, `~/.local/bin`, `~/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`) and requested
+`SLUICE_HOME`, `SLUICE_INSTALL_DIR`, deploy port/readiness and build SHA controls. It does not
+inherit lane runtime or compiler settings. Nested scripts share the service; interruption
+stops it, allowing PID cleanup before systemd reaps remaining descendants. Test mode preserves
+fixture PATH/home and test controls; process-fixture deploys remain plain processes so their
+tests retain ownership of persistent service PIDs. The user manager is required; there is no
+fallback into the caller's capped cgroup.
+
+**`scripts/build-release <prefix>`** runs `cargo build -j 8 --workspace --bins --release --locked`
 with its target dir under `<prefix>/.build/target`, stages `bin/sluice`, `python/`, the private
 tmux (built once by `scripts/build-private-tmux` and cached under `<prefix>/.build`) and
 `assets/`, asks the staged binary its schema (`sluice home schema`, which prints `{"schema": n}`
@@ -113,11 +126,15 @@ installs one commit:
    deploy here, before the fence, with nothing live changed (a binary from before `install
    verify` runs its `install select` on a scratch installation instead);
 3. `scripts/compat-check` the new release: on a scratch copy of the home's database, with its
-   coordinator cut off from systemd, every release an unfinished run is pinned to (plus the
-   selected one and the candidate) runs `log_read`, `status`, `say`, a stale `step_submit` and
+   coordinator a plain child of the host service, using a scratch runtime directory and a dead
+   D-Bus address to cut it off from systemd, every release an unfinished run is pinned to (plus
+   the selected one and the candidate) runs `log_read`, `status`, `say`, a stale `step_submit` and
    `step_context`; a storage or schema error, a crash, a timeout or a submit not refused as
    stale stops the deploy unless `--skip-compat` gives a reason. Each deploy's outcome and any
-   skip reason are appended to `<install>/deploy.log`;
+   skip reason are appended to `<install>/deploy.log`. Compat-check stops its processes by PID
+   and removes `/tmp/cc.*` (a supplied `--copy` remains the caller's); on failure it prints
+   the last 200 lines of each coordinator log with line breaks and an exact rerun command
+   before cleanup;
 4. `install fence "deploy <sha>"`;
 5. stop the services recorded in `services.json` and the home's auto-started coordinator unit;
 6. `install select <release> <home>`;

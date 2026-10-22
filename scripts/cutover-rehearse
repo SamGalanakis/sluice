@@ -6,8 +6,11 @@
 # scripts/compat-check --incompatible --copy. Never touches the live home, its units or files.
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
-exec python3 - "$repo" "$@" <<'PY'
+exec /usr/bin/python3 -I - "$repo" "$@" <<'PY'
 import argparse, datetime, json, os, pathlib, re, shutil, signal, sqlite3, subprocess, sys, tempfile, time
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
+from deploy_host import enter
+enter(pathlib.Path(sys.argv[1]) / 'scripts/cutover-rehearse', sys.argv[2:])
 parser = argparse.ArgumentParser(prog='scripts/cutover-rehearse', description=
     'Play the schema cutover\'s deadline on a private copy of the home with the old release, then '
     'convert the copy with the candidate and check it. Exits non-zero on any failure.')

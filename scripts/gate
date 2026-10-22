@@ -17,7 +17,7 @@ GROUPS = {
                   'crates/sluice-store/tests/store/convert.rs',
                   'crates/sluice-store/tests/store/legacy_replay.rs'),
         'sources': ('scripts/deploy', 'scripts/build-release', 'scripts/compat-check',
-                    'scripts/cutover-rehearse', 'scripts/ship', 'scripts/build-private-tmux',
+                    'scripts/cutover-rehearse', 'scripts/deploy_host.py', 'scripts/ship', 'scripts/build-private-tmux',
                     'crates/sluice/src/install.rs', 'crates/sluice/src/release.rs',
                     'crates/sluice/src/modes/install.rs', 'crates/sluice/src/modes/home.rs',
                     'crates/sluice-store/src/schema.rs', 'crates/sluice-store/src/writer.rs',

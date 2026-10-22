@@ -740,6 +740,11 @@ fn source_tree(root: &Path, families: &[&str], build_release: &str) -> PathBuf {
         source.join("scripts/deploy"),
         std::fs::read(repo().join("scripts/deploy")).unwrap(),
     );
+    std::fs::copy(
+        repo().join("scripts/deploy_host.py"),
+        source.join("scripts/deploy_host.py"),
+    )
+    .unwrap();
     copy_tree(&repo().join("python"), &source.join("python"));
     std::fs::create_dir_all(source.join("crates/sluice-store/src")).unwrap();
     std::fs::write(
@@ -1174,4 +1179,124 @@ fn slow_deploy_verification_rollback_and_failed_recovery() {
             deployment.deploy_log()
         );
     }
+}
+
+// A lane's coordinator rejected a copied 104 GiB execution budget against the lane's
+// 24 GiB cap. Existing compat checks ran without a capped caller and never caught it.
+#[test]
+fn slow_compat_check_escapes_caller_limits_and_reports_full_failure() {
+    let mut gate = support::Gate::new();
+    gate.boot(Path::new(env!("CARGO_BIN_EXE_sluice")), false);
+    gate.rpc(json!({"command":"project_create","args":{"name":"compat-capped","description":"","icon":null,"resources":{},"author":"test"}})).unwrap();
+    gate.stop();
+    std::fs::write(
+        gate.home.join("config.json"),
+        json!({"execution":{"total":{"memory":"2GiB","cpus":1}}}).to_string(),
+    )
+    .unwrap();
+    let release = gate.root.path().join("candidate");
+    std::fs::create_dir_all(release.join("bin")).unwrap();
+    std::fs::write(
+        release.join("manifest.json"),
+        json!({"schema":SCHEMA}).to_string(),
+    )
+    .unwrap();
+    let binary = release.join("bin/sluice");
+    executable::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nif /usr/bin/systemctl --user show-environment >/dev/null 2>&1; then exit 90; fi\nif [ -n \"${{RUSTFLAGS+x}}\" ]; then exit 91; fi\nexec '{}' \"$@\"\n",
+            env!("CARGO_BIN_EXE_sluice")
+        ),
+    );
+    let runtime = format!(
+        "/run/user/{}",
+        std::os::unix::fs::MetadataExt::uid(&std::fs::metadata("/proc/self").unwrap())
+    );
+    let check = |poison: bool, prepared_copy: bool| {
+        Command::new("/usr/bin/systemd-run")
+            .args([
+                "--user",
+                "--quiet",
+                "--wait",
+                "--pipe",
+                "--collect",
+                "--property=MemoryMax=1G",
+                "--property=MemorySwapMax=0",
+                "--",
+            ])
+            .arg("/usr/bin/env")
+            .arg("PATH=/usr/bin:/bin")
+            .arg(if poison {
+                "TOKIO_WORKER_THREADS=invalid"
+            } else {
+                "TOKIO_WORKER_THREADS=2"
+            })
+            .arg(if poison {
+                "RUSTFLAGS=--invalid-inherited-setting"
+            } else {
+                "COMPAT_TEST=clean-runtime"
+            })
+            .arg("SLUICE_TEST=1")
+            .arg(format!("SLUICE_HOME={}", gate.home.display()))
+            .arg("SLUICE_HOST_UNIT=sluice-fake.service")
+            .arg("XDG_RUNTIME_DIR=/nonexistent-compat-bus")
+            .arg("DBUS_SESSION_BUS_ADDRESS=unix:path=/nonexistent-compat-bus/none")
+            .arg(repo().join("scripts/compat-check"))
+            .arg("--release")
+            .arg(&release)
+            .arg(if prepared_copy { "--copy" } else { "--home" })
+            .arg(&gate.home)
+            .arg("--prefix")
+            .arg(gate.root.path().join("prefix"))
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .env(
+                "DBUS_SESSION_BUS_ADDRESS",
+                format!("unix:path={runtime}/bus"),
+            )
+            .output()
+            .unwrap()
+    };
+    let output = check(false, false);
+    assert!(output.status.success(), "{}", text(&output));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("compat: 1 releases ok"),
+        "{}",
+        text(&output)
+    );
+    let output = check(true, false);
+    assert!(output.status.success(), "{}", text(&output));
+    // A failed candidate must show multiline diagnostics and a copyable rerun, and remove
+    // its scratch directory after stopping every process it started.
+    executable::write(
+        &binary,
+        "#!/bin/sh\necho 'first line' >&2\necho 'second line' >&2\necho 'last diagnostic' >&2\nexit 1\n",
+    );
+    let output = check(true, false);
+    assert!(!output.status.success(), "{}", text(&output));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("first line\nsecond line\nlast diagnostic"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("compat: rerun: cd ") && stderr.contains("--release"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let scratch = stdout
+        .split("(scratch ")
+        .nth(1)
+        .unwrap()
+        .split(')')
+        .next()
+        .unwrap();
+    assert!(
+        !Path::new(scratch).exists(),
+        "scratch left behind: {scratch}"
+    );
+    let output = check(true, true);
+    assert_eq!(output.status.code(), Some(1), "{}", text(&output));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("compat: rerun:"));
+    assert!(gate.home.join("sluice.db").is_file());
 }

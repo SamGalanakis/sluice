@@ -85,6 +85,15 @@ The suite is small, fast and end to end. The default run takes about a minute.
 
 ## Shipping
 
+Shipping work (`deploy`, `build-release`, `compat-check` and `cutover-rehearse`) enters a
+collected transient user service in `app.slice`, outside the caller's workload cgroup. The
+launcher connects through `/run/user/<uid>/bus` and gives the work an explicit environment:
+the account's home, UTF-8 locale, a PATH including `~/.cargo/bin`, `~/.local/bin`, `~/bin` and
+system tools, plus the requested home, installation and deploy/build controls. Ship also uses
+that explicit bus address for its gate and adoption checks. Lane runtime, compiler and engine settings are not inherited. Nested shipping scripts share that service.
+Test mode additionally preserves fixture PATH/home and test controls; process-fixture deploys
+stay in their caller because their tests own the persistent services by PID.
+
 Deploy-started services are transient units created with `systemd-run --collect`. Stop and
 re-create them with the same deploy arguments.
 Never `systemctl restart` a deploy-started transient unit; re-create it with `systemd-run` as deploy does, or re-run deploy.
@@ -112,15 +121,17 @@ Never `systemctl restart` a deploy-started transient unit; re-create it with `sy
   the prefix, i.e. the one `scripts/build-release` just built) can serve every release a live
   run is pinned to. It copies the home's `sluice.db` (SQLite backup API, the live file opened
   read-only), `config.json` and fn trees (never a `.env`) into `/tmp/cc.*`, starts the
-  candidate's coordinator on the copy as a plain child with no route to the systemd user
-  manager, and runs `tool log_read`, `status`, `say`, `step_submit` (for a made-up run, which
+  candidate's coordinator on the copy as a plain child of the host service, with a scratch
+  runtime directory and dead D-Bus address so it has no route to the systemd user manager,
+  and runs `tool log_read`, `status`, `say`, `step_submit` (for a made-up run, which
   must be refused as stale) and `step_context` with each pinned release, the selected one and
   the candidate. A storage or schema error, a crash, a timeout or a submit not refused as stale
   fails it; any other typed refusal (e.g. `invalid` for a fixture fn the CLI's catalog lacks)
   shows as `refused` with its message but does not. It prints a release × command table, stops
   what it started by PID, removes the copy, and exits 0 when nothing failed (also when nothing
-  is live). `--pinned DIR` adds a release; `--mark-schema N` marks the copy at schema
-  N once the candidate has opened it, to prove the check catches a bump. A candidate whose
+  is live). Failures print the last 200 lines of each coordinator log, preserving line breaks,
+  and an exact rerun command before removing the scratch directory. `--pinned DIR` adds a
+  release; `--mark-schema N` marks the copy at schema N once the candidate has opened it, to prove the check catches a bump. A candidate whose
   manifest `schema` differs from the home's (or `--incompatible`) is checked in incompatible
   mode instead: no run in the copy may be live, the candidate's `sluice home migrate` converts
   it, the candidate serves it, and the old release (`--old`, default the selected one) must

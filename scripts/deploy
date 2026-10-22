@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 repo=$(cd "$(dirname "$(realpath "$0")")/.." && pwd)
-exec python3 - "$repo" "$@" <<'PY'
+exec /usr/bin/python3 -I - "$repo" "$@" <<'PY'
 import argparse, datetime, hashlib, json, math, os, pathlib, re, shlex, shutil, signal, socket, sqlite3, subprocess, sys, tarfile, tempfile, time, urllib.request
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'scripts'))
+from deploy_host import enter
+enter(pathlib.Path(sys.argv[1]) / 'scripts/deploy', sys.argv[2:])
 parser = argparse.ArgumentParser(prog='scripts/deploy', description=
     'Build REF into a release, check it, and switch the installation to it. A release whose '
     'schema differs from the home\'s goes out only with --schema-cutover.')
