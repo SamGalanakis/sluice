@@ -70,6 +70,9 @@ struct Harness {
 }
 impl Harness {
     async fn new(config: Value) -> Self {
+        Self::with_timing(config, delivery_timing()).await
+    }
+    async fn with_timing(config: Value, timing: ClaudeDeliveryTiming) -> Self {
         let scratch = Scratch::new();
         for dir in ["run", "work", "claude", "home"] {
             fs::create_dir(scratch.0.join(dir)).unwrap();
@@ -104,7 +107,7 @@ impl Harness {
         };
         let run = RunId::new();
         let adapter = Claude::new(wrapper, scratch.0.join("claude"), fixture.clone(), run)
-            .with_delivery_timing(delivery_timing());
+            .with_delivery_timing(timing);
         let hook_listener =
             std::os::unix::net::UnixListener::bind(scratch.0.join("hook.sock")).unwrap();
         hook_listener.set_nonblocking(true).unwrap();
@@ -198,6 +201,9 @@ impl Harness {
             .unwrap();
     }
     async fn poll(&mut self) -> EngineObservation {
+        self.try_poll().await.unwrap()
+    }
+    async fn try_poll(&mut self) -> Result<EngineObservation, EngineError> {
         use std::io::{BufRead, BufReader, Read};
         while let Ok((mut stream, _)) = self.hook_listener.accept() {
             stream
@@ -215,7 +221,7 @@ impl Harness {
             bytes.push(b'\n');
             stream.write_all(&bytes).unwrap();
         }
-        self.adapter.observe(&self.context).await.unwrap()
+        self.adapter.observe(&self.context).await
     }
     async fn turn(&mut self, id: InputId, text: &str, turns: u64) -> EngineObservation {
         let outcome = self
@@ -558,6 +564,71 @@ async fn fake_addressed_message_can_be_queued_during_an_active_turn() {
             .contains(&InputId::Message { id: MessageId(9) })
     );
     assert_eq!(h.prompts().len(), 2);
+    h.cleanup().await;
+}
+// Regression: a busy-turn attachment with no prompt hook used to block the
+// outgoing queue forever, so the second addressed message was never pasted.
+#[tokio::test]
+async fn busy_queued_commands_acknowledge_both_steers_without_hooks() {
+    let mut h = Harness::new(json!({"busy_input":"inject","turns":[{"busy_s":2.0}]})).await;
+    h.launch(None).await;
+    h.adapter
+        .execute(
+            &h.context,
+            EngineCommand::DeliverText {
+                id: InputId::Task,
+                text: "original task".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let o = h.poll().await;
+        if o.acknowledged.contains(&InputId::Task) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "task not acknowledged: {o:?}");
+        tokio::task::yield_now().await;
+    }
+    let ids = [
+        InputId::Message { id: MessageId(71) },
+        InputId::Message { id: MessageId(72) },
+    ];
+    let texts = ["First addressed busy input", "Second addressed busy input"];
+    for (id, text) in ids.iter().zip(texts) {
+        h.adapter
+            .execute(
+                &h.context,
+                EngineCommand::Steer {
+                    id: id.clone(),
+                    text: text.into(),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let last = loop {
+        let o = h.poll().await;
+        if ids.iter().all(|id| o.acknowledged.contains(id)) {
+            break o;
+        }
+        if Instant::now() >= deadline {
+            h.cleanup().await;
+            panic!("busy inputs never acknowledged: {o:?}");
+        }
+        tokio::task::yield_now().await;
+    };
+    assert_eq!(last.turns_completed, 0);
+    assert_eq!(h.prompts(), ["original task", texts[0], texts[1]]);
+    let hooks = fs::read_to_string(h.context.run_dir.join("fixture-events.jsonl")).unwrap();
+    assert_eq!(
+        hooks
+            .lines()
+            .filter(|line| line.contains("UserPromptSubmit"))
+            .count(),
+        1
+    );
     h.cleanup().await;
 }
 use super::support as acceptance;
@@ -1765,4 +1836,95 @@ fn transcript_error(entry: &Value) -> Option<EngineError> {
 
 fn text_entry(category: &str, text: &str) -> Value {
     json!({"type":"assistant","isApiErrorMessage":true,"error":category,"message":{"content":[{"type":"text","text":text}]}})
+}
+
+// Regression: merged queued prompts must acknowledge every contained input once,
+// in order, while sidechains and text fragments must never count as acceptance.
+#[test]
+fn queued_prompt_decoder_matches_merged_inputs_only_on_the_main_thread() {
+    for via_hook in [false, true] {
+        let mut state = prompted();
+        let ids = [
+            InputId::Message { id: MessageId(91) },
+            InputId::Message { id: MessageId(92) },
+        ];
+        for (id, text) in ids
+            .iter()
+            .zip(["first queued input", "second queued input"])
+        {
+            state.pending(id.clone(), text.into());
+        }
+        let entry = json!({"type":"attachment","attachment":{"type":"queued_command",
+            "prompt":"first queued input\n\nsecond queued input"}});
+        state.transcript(&json!({"type":"attachment","attachment":{"type":"queued_command","prompt":"prefix first queued input suffix"}}), true);
+        state.transcript(&entry, false);
+        state.transcript(
+            &json!({"isSidechain":true, "type":"attachment", "attachment":entry["attachment"]}),
+            true,
+        );
+        assert!(snapshot(&mut state, "busy", 1).acknowledged.is_empty());
+        if via_hook {
+            state
+                .hook(&hook(
+                    "UserPromptSubmit",
+                    json!({"prompt":entry["attachment"]["prompt"]}),
+                ))
+                .unwrap();
+        } else {
+            state.transcript(&entry, true);
+            state.transcript(&entry, true);
+        }
+        assert_eq!(snapshot(&mut state, "busy", 2).acknowledged, ids);
+    }
+}
+
+// Regression: these give-up thresholds used to be hardcoded, leaving both
+// verified nonacceptance and a submitted draft's uncertain acceptance untested.
+#[tokio::test]
+async fn composer_give_up_timing_distinguishes_unsent_and_submitted_input() {
+    for submitted in [false, true] {
+        let mut h = Harness::with_timing(
+            if submitted {
+                json!({"drop_enters":100})
+            } else {
+                json!({"cover_ms":60000})
+            },
+            ClaudeDeliveryTiming {
+                ready_wait: Duration::from_millis(80),
+                submitted_draft_wait: Duration::from_millis(80),
+                ..delivery_timing()
+            },
+        )
+        .await;
+        h.launch(None).await;
+        h.adapter
+            .execute(
+                &h.context,
+                EngineCommand::DeliverText {
+                    id: InputId::Task,
+                    text: "timed composer input".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if submitted {
+                match h.try_poll().await {
+                    Err(error) => {
+                        assert_eq!(error.kind, EngineErrorKind::UnknownAcceptance);
+                        assert!(error.message.contains("draft never left"));
+                        break;
+                    }
+                    Ok(o) => assert!(!o.acknowledged.contains(&InputId::Task)),
+                }
+            } else if h.poll().await.not_accepted.contains(&InputId::Task) {
+                assert!(!h.context.run_dir.join("fixture-prompts.jsonl").exists());
+                break;
+            }
+            assert!(Instant::now() < deadline, "composer did not give up");
+            tokio::task::yield_now().await;
+        }
+        h.cleanup().await;
+    }
 }

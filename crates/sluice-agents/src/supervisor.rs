@@ -1,6 +1,6 @@
 //! Shared state machine and admitted-invocation driver.
 use crate::{
-    delivery::DeliveryLedger,
+    delivery::{DeliveryLedger, DeliveryState},
     engines::*,
     git::{self, GitFacts},
     prompt,
@@ -48,6 +48,9 @@ pub struct Limits {
     pub poll: Duration,
     pub ready: Duration,
     pub turn_start: Duration,
+    /// Idle time to receive acceptance evidence for input left pending after a turn.
+    /// Injected directly by tests, never read from home settings.
+    pub delivery_ack: Duration,
     /// Legacy wait timeout, accepted for compatibility; live work no longer triggers nudges.
     pub wait: Duration,
     pub dialog: Duration,
@@ -66,6 +69,7 @@ impl Default for Limits {
             poll: Duration::from_millis(500),
             ready: Duration::from_secs(180),
             turn_start: Duration::from_secs(60),
+            delivery_ack: Duration::from_secs(60),
             wait: Duration::from_secs(90 * 60),
             dialog: Duration::from_secs(60),
             quiet: Duration::from_secs(60 * 60),
@@ -138,6 +142,9 @@ impl Limits {
             poll: Duration::from_millis(2),
             ready: Duration::from_secs(1),
             turn_start: Duration::from_millis(100),
+            // Native fixture turns can take longer under gate load. Tests of the
+            // acknowledgement deadline inject their own bound.
+            delivery_ack: Self::default().delivery_ack,
             wait: Duration::from_millis(100),
             dialog: short,
             quiet: Duration::from_millis(100),
@@ -576,6 +583,9 @@ pub struct Machine {
     required: Vec<String>,
     reports_waiting: bool,
     base_turns: u64,
+    /// Inputs steered into work that had completed this many turns at the offer.
+    steered_inputs: BTreeMap<InputId, u64>,
+    idle_delivery_since: Option<Duration>,
     base_starts: u64,
     awaiting: Option<Duration>,
     /// Input steered into a busy turn rides that turn, so it starts no turn-start wait.
@@ -628,6 +638,8 @@ impl Machine {
             required,
             reports_waiting,
             base_turns: 0,
+            steered_inputs: BTreeMap::new(),
+            idle_delivery_since: None,
             base_starts: 0,
             awaiting: None,
             steered: false,
@@ -660,6 +672,12 @@ impl Machine {
         self.base_turns = observation.turns_completed;
         self.base_starts = observation.turns_started;
         self.steered = observation.status == EngineStatus::Busy;
+        if self.steered {
+            self.steered_inputs
+                .insert(id.clone(), observation.turns_completed);
+        } else {
+            self.steered_inputs.remove(id);
+        }
         self.awaiting = (!self.steered).then_some(now);
         self.idle_since = None;
         self.checkpoint.state = State::Delivering;
@@ -766,6 +784,35 @@ impl Machine {
                 ));
             }
             return Ok(Action::None);
+        }
+        // Turn counters describe work, not acceptance. Stop can leave a busy-turn
+        // steer Offered. Permit late evidence for the delivery-ack interval, then
+        // fail by name. Fresh idle-composer deliveries keep their turn-start wait.
+        self.steered_inputs.retain(|id, _| {
+            self.checkpoint
+                .delivery
+                .entries
+                .iter()
+                .any(|entry| entry.id == *id && entry.state == DeliveryState::Offered)
+        });
+        if o.status == EngineStatus::Idle
+            && self
+                .steered_inputs
+                .values()
+                .any(|completed| o.turns_completed > *completed)
+        {
+            let since = *self.idle_delivery_since.get_or_insert(now);
+            if now.saturating_sub(since) >= self.limits.delivery_ack {
+                return Err(failure(
+                    FailureKind::TurnStartTimeout,
+                    format!(
+                        "engine left input(s) {:?} unacknowledged after its turn ended; refusing blind replay",
+                        self.steered_inputs.keys().collect::<Vec<_>>()
+                    ),
+                ));
+            }
+        } else {
+            self.idle_delivery_since = None;
         }
         if let Some(sent) = self.awaiting
             && now.saturating_sub(sent) >= self.limits.turn_start
@@ -1708,6 +1755,7 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
                 machine.boot_at = now;
                 for since in [
                     &mut machine.awaiting,
+                    &mut machine.idle_delivery_since,
                     &mut machine.idle_since,
                     &mut machine.dialog_since,
                 ] {

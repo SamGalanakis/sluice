@@ -11,7 +11,20 @@ the recorded 2.1.283 behavior, and the compaction case below 2.1.294's. Those th
 a newer Claude Code runs untested (SPEC §15). The fake executable uses
 these channels and scripts turn timing, submit, tools/errors, background shell,
 wakeup, compaction, startup/trust, dropped Enter, resume and early exit. Its
-submission file is test evidence, never a production completion signal.
+`busy_input: "inject"` mode consumes Enter during an active turn as a main-thread
+`attachment` with `attachment.type: "queued_command"` and `attachment.prompt`, without
+firing `UserPromptSubmit` or starting another turn. This is the attachment shape in the
+captured real Sluice session at `../activity/claude/transcript.jsonl` (four addressed inputs).
+The mode deliberately withholds the hook to cover the failure when that is the only
+acceptance evidence; it does not assert that every Claude version always omits that hook.
+A merged queued prompt can contain several complete pending inputs, separated by newlines.
+The fixture's submission file is test evidence, never a production completion signal.
+
+A labelled real CLI probe on 2026-10-22 with Claude Code 2.1.308 in a private scratch
+workspace reached `SessionStart` and `UserPromptSubmit` for its initial prompt, then the
+account's weekly usage limit (`rate_limit`, HTTP 429) prevented the foreground Bash turn.
+It could not reach busy-input injection, so it established no new queued-input hook behavior.
+The captured transcript above remains the real evidence for the attachment shape.
 
 `real-usage-limits.jsonl` holds the API error entries 2.1.284 wrote for usage and rate limits
 in the owner's transcripts, cut to their error fields and with request ids redacted: the weekly

@@ -302,8 +302,11 @@ the step binds `listen: false`. A person is never asked through a step's thread:
 one, ask `to="owner"` (`docs("inbox")`).
 
 - To steer a running step, tell it: `say(project="myproj", to="work", body="skip the
-  Windows build")`; the receipt says whether its live run got it (`delivered`). Messages to a
-  step are delivered to its runs durably: each step keeps a delivery cursor, a run is
+  Windows build")`; `delivered` means the listening run has it on its live feed. The engine
+  acknowledges it separately: Claude can consume busy-turn input through a queued-command
+  attachment without starting another turn. A steered input left unacknowledged after that
+  turn ends fails the idle run within 60 s as `TurnStartTimeout`, naming its input id; only verified
+  nonacceptance permits one redelivery. Each step keeps a durable delivery cursor: a run is
   assigned every message after it when it is reserved, and a retried step picks up where the
   last attempt left off.
 - To answer what it asks, `reply(project, to="work", body=...)`, or use its id with

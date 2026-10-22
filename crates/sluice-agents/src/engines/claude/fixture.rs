@@ -320,7 +320,13 @@ impl Fake {
                         self.hook("SessionEnd", json!({}))?;
                         return Ok(false);
                     }
-                    self.queue.push_back(text);
+                    if self.active.is_some() && self.config["busy_input"] == "inject" {
+                        // Real Claude can consume queued input inside the current turn,
+                        // without a UserPromptSubmit hook or a second turn.
+                        self.entry(json!({"type":"attachment","attachment":{"type":"queued_command","prompt":text}}))?;
+                    } else {
+                        self.queue.push_back(text);
+                    }
                 }
                 b'\r' => self.draft.push('\n'),
                 1 | 5 => {}

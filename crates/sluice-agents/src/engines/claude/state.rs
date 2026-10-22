@@ -148,6 +148,32 @@ impl ClaudeState {
         self.pending.push_back((id, text));
         true
     }
+    /// Claude may merge queued prompts. Match complete pending texts in their
+    /// order in the consumed prompt, never matching the same occurrence twice.
+    fn accept_prompt(&mut self, prompt: &str) {
+        let mut rest = prompt.trim_matches(['\r', '\n']);
+        let mut at = 0;
+        while at < self.pending.len() {
+            let text = self.pending[at].1.trim_matches(['\r', '\n']);
+            if let Some(start) = (!text.is_empty())
+                .then(|| {
+                    rest.match_indices(text).find_map(|(start, _)| {
+                        let end = start + text.len();
+                        ((start == 0 || rest.as_bytes()[start - 1] == b'\n')
+                            && (end == rest.len() || rest.as_bytes()[end] == b'\n'))
+                            .then_some(start)
+                    })
+                })
+                .flatten()
+            {
+                rest = &rest[start + text.len()..];
+                let (id, _) = self.pending.remove(at).expect("position exists");
+                self.observation.acknowledged.push(id);
+            } else {
+                at += 1;
+            }
+        }
+    }
     pub fn summary_lines(&mut self) -> Vec<String> {
         self.summaries.drain(..).collect()
     }
@@ -193,15 +219,7 @@ impl ClaudeState {
                 self.observation.error = None;
                 self.observation.status = EngineStatus::Busy;
                 if let Some(prompt) = &hook.prompt {
-                    let prompt = prompt.trim_matches(['\r', '\n']);
-                    if let Some(at) = self
-                        .pending
-                        .iter()
-                        .position(|(_, text)| text.trim_matches(['\r', '\n']) == prompt)
-                    {
-                        let (id, _) = self.pending.remove(at).expect("position exists");
-                        self.observation.acknowledged.push(id);
-                    }
+                    self.accept_prompt(prompt);
                 }
             }
             "Stop" | "StopFailure" if hook.agent_id.is_none() => {
@@ -262,6 +280,13 @@ impl ClaudeState {
         self.observation.progress += 1;
         let main = main && entry.get("isSidechain").and_then(Value::as_bool) != Some(true);
         let kind = entry["type"].as_str().unwrap_or_default();
+        if main
+            && kind == "attachment"
+            && entry["attachment"]["type"] == "queued_command"
+            && let Some(prompt) = entry["attachment"]["prompt"].as_str()
+        {
+            self.accept_prompt(prompt);
+        }
         let content = &entry["message"]["content"];
         if main {
             match kind {
@@ -558,6 +583,10 @@ pub struct ClaudeDeliveryTiming {
     /// Time a pasted draft gets to appear, before it is cleared and pasted again.
     pub draft_wait: Duration,
     pub draft_attempts: u32,
+    /// Time an input may wait for a ready composer before verified nonacceptance.
+    pub ready_wait: Duration,
+    /// Time a submitted draft may remain visible before acceptance is uncertain.
+    pub submitted_draft_wait: Duration,
     pub dialog_retry: Duration,
     /// Minimum time a visible draft settles before Enter.
     pub draft_settle: Duration,
@@ -573,6 +602,8 @@ impl Default for ClaudeDeliveryTiming {
             cover_wait: Duration::from_secs(2),
             draft_wait: Duration::from_secs(5),
             draft_attempts: 3,
+            ready_wait: Duration::from_secs(180),
+            submitted_draft_wait: Duration::from_secs(20),
             dialog_retry: Duration::from_millis(750),
             draft_settle: Duration::from_millis(100),
             enter_retry: Duration::from_secs(1),
@@ -961,7 +992,8 @@ impl Claude {
         DeliveryOutcome::Pending
     }
     /// Moves the oldest waiting input one step: paste it into a ready composer (`Ready`), send
-    /// Enter once its draft shows (`Draft`), then wait for `UserPromptSubmit` (`Submitted`).
+    /// Enter once its draft shows (`Draft`), then wait for a prompt hook or queued-command
+    /// attachment (`Submitted`).
     /// `busy` is Claude's own status, `bracketed` whether it takes bracketed paste: a paste
     /// without it would type the text's newlines as Enter, and with it no paste can submit, so
     /// an input whose draft never showed was never taken.
@@ -1001,7 +1033,7 @@ impl Claude {
                     .escaped_at
                     .is_none_or(|at| at.elapsed() >= self.delivery_timing.escape_settle);
                 if !ready || !bracketed || !settled {
-                    if front.since.elapsed() > Duration::from_secs(180) {
+                    if front.since.elapsed() > self.delivery_timing.ready_wait {
                         let delivery = self.outgoing.pop_front().unwrap();
                         self.state.pending.retain(|(id, _)| *id != delivery.id);
                         self.state.observation.not_accepted.push(delivery.id);
@@ -1109,7 +1141,7 @@ impl Claude {
             }
             PastePhase::Submitted => {
                 if protocol::draft_visible(pane, &needle) {
-                    if front.since.elapsed() >= Duration::from_secs(20) {
+                    if front.since.elapsed() >= self.delivery_timing.submitted_draft_wait {
                         return Err(failure(
                             EngineErrorKind::UnknownAcceptance,
                             "claude: draft never left the composer",
@@ -1122,7 +1154,8 @@ impl Claude {
                         self.key("Enter").await?;
                     }
                 }
-                // Absence of a draft is not acceptance. Wait for UserPromptSubmit.
+                // Absence of a draft is not acceptance. Wait for a prompt hook or
+                // a main-thread queued-command attachment.
             }
         }
         Ok(())

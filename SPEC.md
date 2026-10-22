@@ -1599,7 +1599,9 @@ recipient has no live reader (§8.1). A run listens when
 its fn takes a `listen` input (every agent fn, and a pack fn that runs one and passes
 `listen` on) and its inputs do not set it to `false`; its reservation freezes this, so the
 receipt reads stored rows, never which guardian protocol (a held watch or a poll) the run's
-guardian speaks. A run reserved before reservations froze it listens if its step runs an
+guardian speaks, and does not assert that the engine acknowledged the input. Engine acceptance
+is recorded separately; a pending input cannot leave an idle completed turn waiting forever
+(§15). A run reserved before reservations froze it listens if its step runs an
 agent fn without binding `listen: false`, or once it has acknowledged a message. `delivery`
 is `queued` when the step will run (pending and not paused, or its run reserved but not
 started, which `run` names) and its next run is assigned the message; `no_live_run` when the
@@ -2996,6 +2998,14 @@ happened and to whom: `could not connect to the coordinator (…); the request w
 `the run's guardian did not answer within 5s; acceptance may be unknown`, or `… ended the
 exchange without an answer (…)`.
 
+An input steered into a busy turn and still pending while the engine is idle after that turn
+has a 60 s acceptance-evidence
+budget (`Limits::delivery_ack`, injected directly by tests). A missing acknowledgement is not
+proof of rejection: expiry fails the run as `TurnStartTimeout`, naming the unacknowledged
+input ids and refusing blind replay, so later inputs cannot wait behind one forever. Positive
+`NotAccepted` evidence uses the normal single verified redelivery; another rejection fails
+as `TurnStartTimeout` with `engine did not accept input after one verified redelivery`.
+
 The agent is done when it submits: the supervisor stops the session as soon as the run's
 valid submission is stored, busy or not, and returns the result (§6.4); `final` is the agent's
 last final-answer message (Codex excludes commentary), which a busy agent may not have finished.
@@ -3035,8 +3045,11 @@ background work the `Stop` hook listed is that wait, not a turn for `SLUICE_AGEN
 prompt, tool result or reply in the transcript makes it a turn again.
 
 Input reaches Claude as one bracketed paste into its composer, sent with Enter once the draft
-shows, and the `UserPromptSubmit` that carries it accepts it. The adapter pastes only into a
-composer the pane shows and only while Claude has bracketed paste on, so a paste cannot submit;
+shows. Acceptance is a main-agent `UserPromptSubmit` carrying the input or a main-thread
+`queued_command` transcript attachment carrying input consumed during a busy turn, even when
+no prompt hook fires. A merged prompt acknowledges each complete pending input it contains in
+order; subagent hooks and sidechain attachments never acknowledge main-agent input. The
+adapter pastes only into a composer the pane shows and only while Claude has bracketed paste on, so a paste cannot submit;
 it empties the composer with `C-e C-u BSpace`, never with Escape. Claude opens Rewind on two
 Escapes it handles within 800 ms, and while it loads a long resumed session it handles keys late
 and together, so Escape goes only to a surface over a composer the launch has shown: one that
@@ -3046,8 +3059,10 @@ Claude is not working. Each such surface gets one Escape, Escapes are at least 3
 paste waits 1.5 s after one. A draft that does not show within 5 s was not taken, since Enter
 was not sent: the run's log gets the pane and the input is pasted again. After 3 pastes the
 adapter gives back every input it holds as not accepted and the session fails as `Transient`, so
-the retry delivers them again. Only an input sent with Enter whose draft stays in the composer
-for 20 s fails the run as `UnknownAcceptance`.
+the retry delivers them again. An input sent with Enter whose draft stays in the composer
+for 20 s fails the run as `UnknownAcceptance`. An input waiting for a ready composer for
+180 s is returned as not accepted. These two thresholds are `ClaudeDeliveryTiming` fields,
+injected directly by tests; production keeps those intervals.
 
 A Devin turn ends at a `Stop` hook that no other hook follows for 10 s, once the pane no longer
 shows Devin working (the `(esc twice to interrupt)` spinner or the `Guide Devin while it works`
