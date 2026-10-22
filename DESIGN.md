@@ -526,7 +526,12 @@ for each.
   A page's stream (`streams::page_events`) renders the page again and sends each region that
   changed (`#id`, mode `outer`, the default), so the morph keeps focus, scroll and open folds;
   it sends only the smallest region whose data changed, including a row's latest message,
-  stage track, pulse strip and drill stamp separately. The roster count arrives as a signal patch. Plan group, quiet and unit folds preserve
+  stage track, pulse strip and drill stamp separately. Pulse marks append into a stable keyed
+  container; the last hour is bounded to 90 action minutes and 90 message timestamps, with
+  expired marks removed. Activity patches individual turns and appends new turns, keeping
+  failures and the latest-turn window. Accessible summaries and tab counts have their own
+  small regions. A connection compares with the page's rendered version (or its last
+  acknowledged batch) from a bounded fingerprint history; an unknown version catches up whole. The roster count arrives as a signal patch. Plan group, quiet and unit folds preserve
   `open`, with project-scoped session memory restoring re-created folds; a group's initial
   default applies only before the viewer has chosen. Counts have their own regions, so count
   or activity changes alone leave the roster skeleton unchanged. A quiet page sends nothing.

@@ -272,14 +272,15 @@ async fn plan_units_and_loose_steps() {
                 && !a6.contains("fold-n")
                 && a6.contains("class=\"heard\">· heard <time data-ago=")
                 && a6.contains("<b class=\"uv-from\">draft</b>: Entries 41 to 58")
-                && a6.contains("aria-label=\"Its pulse: acted in ")
-                && a6.contains(" minutes of its run, 3 messages lately\""),
+                && a6.contains("aria-label=\"Its pulse\"")
+                && a6.contains("acted in ")
+                && a6.contains(" minutes of its run, 2 messages lately</span>"),
             "{a6}"
         );
         let strip = &a6[at(a6, "class=\"ro-track\"")..at(a6, "<div id=\"drill-a-6\"")];
         assert_eq!(
-            strip.matches(" class=\"pk pk-m\"></i>").count(),
-            3,
+            strip.matches(" class=\"pk pk-m\" id=").count(),
+            2,
             "{strip}"
         );
         // quiet: its stage says so and for how long, the dot beside it ochre
@@ -290,7 +291,7 @@ async fn plan_units_and_loose_steps() {
                 && s3.contains("<span class=\"live quiet\""),
             "{s3}"
         );
-        assert!(s3.contains(" class=\"pk-tail is-quiet\"></i>"), "{s3}");
+        assert!(s3.contains(" class=\"pk-tail is-quiet\" id="), "{s3}");
         // nothing heard since its run began: said once
         let index = plan_html::row(&html, "index");
         assert!(

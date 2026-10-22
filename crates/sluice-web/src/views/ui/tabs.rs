@@ -72,8 +72,9 @@ pub fn tabs_open(prefix: &str, label: &str, tabs: &[Tab], selected: &str) -> Tru
         .attr("id", format!("{prefix}tabs"))
         .attr("current", selected)
         .keep("current");
+    let id = format!("{}tab-bar", esc(prefix));
     TrustedHtml::owned(format!(
-        "{}<div class=\"tabs\" role=\"tablist\" aria-label=\"{label}\">{bar}</div>",
+        "{}<!--r:{id}--><div class=\"tabs\" role=\"tablist\" id=\"{id}\" aria-label=\"{label}\">{bar}</div><!--/r:{id}-->",
         host.open(),
         label = esc(label),
     ))

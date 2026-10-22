@@ -1887,8 +1887,8 @@ fn last_messages(
     Ok(own)
 }
 /// How far back the plan reads what its units said, seconds: twelve hours. A row's strip shows
-/// the last hour of it; an older message sits left of the strip, clipped, so a message leaving
-/// the hour changes nothing a stream sends.
+/// the last hour of it, bounded separately by the strip renderer; older messages remain
+/// available to the unit's timeline.
 pub const SAID_WINDOW: f64 = 12.0 * 3600.0;
 /// What each unit's steps said in the last `SAID_WINDOW`: by unit, each message's step and when
 /// (seconds since the epoch), oldest first. One pass over the project's messages, newest first,

@@ -1799,16 +1799,9 @@ fn row_counts(rows: &[&Row<'_>]) -> String {
 /// something. A `sluice-pulse`: pointed at, a mark says what it did that minute, and its left
 /// edge, faded while its run began before the window, when it began (`pulse`).
 pub fn track(unit: &str, pulse: &super::unit_steps::Pulse<'_>, now: f64) -> String {
-    let (marks, said) = pulse.html(now);
-    super::pulse::host(
-        "ro-track",
-        unit,
-        "",
-        pulse.start,
-        &format!("Its pulse: {said}"),
-    )
-    .wrap(&TrustedHtml::owned(marks))
-    .to_string()
+    let (marks, said) = pulse.stream_html(now, &format!("pulse-marks-{unit}"));
+    let host = super::pulse::host("ro-track", unit, "", pulse.start, "Its pulse");
+    super::pulse::labelled(host, &format!("pulse-label-{unit}"), &said, &marks)
 }
 /// What a row of At work is drawn from (HTML where it says so).
 pub struct RowParts<'a> {

@@ -255,10 +255,17 @@ impl Pulse<'_> {
     /// acted (its latest `PULSE_MARKS`), a taller one each message. With its words for a screen
     /// reader: how many actions and messages it shows, and whether it has gone quiet.
     pub fn html(&self, now: f64) -> (String, String) {
+        self.draw(now, None)
+    }
+    /// A bounded keyed list: one new mark appends alone; expired marks are removed.
+    pub fn stream_html(&self, now: f64, id: &str) -> (String, String) {
+        self.draw(now, Some(id))
+    }
+    fn draw(&self, now: f64, id: Option<&str>) -> (String, String) {
         let mut minutes: Vec<f64> = self
             .acts
             .iter()
-            .filter(|t| self.start.is_none_or(|s| **t >= s - 60.0))
+            .filter(|t| **t >= now - PULSE && self.start.is_none_or(|s| **t >= s - 60.0))
             .map(|t| (t / 60.0).floor() * 60.0)
             .collect();
         minutes.dedup();
@@ -270,32 +277,58 @@ impl Pulse<'_> {
         {
             minutes.push((active / 60.0).floor() * 60.0);
         }
+        minutes.retain(|t| *t >= now - PULSE);
         let minutes = &minutes[minutes.len().saturating_sub(PULSE_MARKS)..];
+        let mut said_times: Vec<f64> = self
+            .said
+            .iter()
+            .copied()
+            .filter(|t| *t >= now - PULSE)
+            .collect();
+        said_times.dedup();
+        let said_times = &said_times[said_times.len().saturating_sub(PULSE_MARKS)..];
         let last = [last_act, self.said.last().copied(), self.active, self.start]
             .into_iter()
             .flatten()
             .reduce(f64::max);
         let mut out = String::new();
+        let mut piece = |key: String, html: String| {
+            if let Some(id) = id {
+                let child = format!("{id}-{key}");
+                let html = html.replacen("></i>", &format!(" id=\"{child}\"></i>"), 1);
+                out.push_str(&format!("<!--r:{child}-->{html}<!--/r:{child}-->"));
+            } else {
+                out.push_str(&html);
+            }
+        };
         if let Some(last) = last.filter(|_| self.live) {
-            out.push_str(&bar(
-                if self.quiet {
-                    "pk-tail is-quiet"
-                } else {
-                    "pk-tail"
-                },
-                last,
-                None,
-                now,
-            ));
+            piece(
+                "tail".into(),
+                bar(
+                    if self.quiet {
+                        "pk-tail is-quiet"
+                    } else {
+                        "pk-tail"
+                    },
+                    last,
+                    None,
+                    now,
+                ),
+            );
         }
         if let Some(start) = self.start {
-            out.push_str(&mark("pk-start", start, now));
+            piece("start".into(), mark("pk-start", start, now));
         }
         for t in minutes {
-            out.push_str(&mark("pk", *t, now));
+            piece(format!("act-{t:.0}"), mark("pk", *t, now));
         }
-        for t in self.said {
-            out.push_str(&mark("pk pk-m", *t, now));
+        for t in said_times {
+            piece(format!("said-{t:.0}"), mark("pk pk-m", *t, now));
+        }
+        if let Some(id) = id {
+            out = format!(
+                "<!--r:{id}--><span id=\"{id}\" data-stream-list>{out}</span><!--/r:{id}-->"
+            );
         }
         let mut words = vec![];
         if !minutes.is_empty() {
@@ -304,10 +337,10 @@ impl Pulse<'_> {
                 ui::count(minutes.len(), "minute", "minutes")
             ));
         }
-        if !self.said.is_empty() {
+        if !said_times.is_empty() {
             words.push(format!(
                 "{} lately",
-                ui::count(self.said.len(), "message", "messages")
+                ui::count(said_times.len(), "message", "messages")
             ));
         }
         let mut said = if words.is_empty() {
@@ -982,7 +1015,13 @@ impl View<'_> {
                 }
             }
             if let Some(axis) = &axis {
-                out.push_str(&track(axis, &self.unit, step));
+                let id = format!("sv-pulse-{}", step.id);
+                let html = track(axis, &self.unit, step).replacen(
+                    " class=\"sv-tr\"",
+                    &format!(" id=\"{id}\" class=\"sv-tr\""),
+                    1,
+                );
+                out.push_str(&format!("<!--r:{id}-->{html}<!--/r:{id}-->"));
             }
             out.push_str("<span class=\"sv-sp\">");
             match &step.span {
@@ -1124,7 +1163,7 @@ fn track(axis: &Axis, unit: &str, step: &Step<'_>) -> String {
                 active: step.active,
                 quiet: step.quiet_since.is_some(),
             }
-            .html(axis.t1);
+            .stream_html(axis.t1, &format!("sv-marks-{}", step.id));
             bars.push_str(&marks);
             edge = Some(span.from);
             continue;
@@ -1210,9 +1249,9 @@ fn track(axis: &Axis, unit: &str, step: &Step<'_>) -> String {
             unit,
             if pulsed { &step.id } else { "" },
             edge,
-            &words,
+            "Run timeline",
         );
-        return host.wrap(&TrustedHtml::owned(bars)).to_string();
+        return super::pulse::labelled(host, &format!("sv-label-{}", step.id), &words, &bars);
     }
     format!(
         "<span class=\"sv-tr\" role=\"img\" aria-label=\"{}\">{bars}</span>",

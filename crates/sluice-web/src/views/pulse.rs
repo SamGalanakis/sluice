@@ -64,6 +64,18 @@ pub fn host(class: &str, unit: &str, step: &str, from: Option<f64>, label: &str)
         .keep("data-before")
 }
 
+/// Keep the changing accessible description independent of a strip's stable marks container.
+/// A new mark changes this small text region, never the whole pulse host.
+pub fn labelled(host: Host, id: &str, words: &str, marks: &str) -> String {
+    let label = format!(
+        "<!--r:{id}--><span id=\"{id}\" class=\"vh\">{}</span><!--/r:{id}-->",
+        esc(words)
+    );
+    host.attr("aria-describedby", id)
+        .wrap(&super::TrustedHtml::owned(format!("{label}{marks}")))
+        .to_string()
+}
+
 #[derive(Deserialize)]
 pub struct PulseQuery {
     /// The popover it is drawn in (`popover`'s id).

@@ -2560,6 +2560,17 @@ with nothing in it a hidden placeholder, so it keeps its place), each item of Ne
 row of At work, its latest message and pulse strip separately, a step's page's head (`#step-band`)
 and detail apart, a unit's page's head and detail, the message views' head, the plan's facts
 and the board's pane.
+The server retains the fingerprints and child IDs of the latest 64 rendered versions, up to
+8 MiB. A stream starts from the version embedded in the page, or the last batch acknowledged
+by its final version signal; a change between rendering and connecting is diffed against
+that version. An evicted version or a server restart falls back to a full catch-up. Pulse
+strips keep at most 90 distinct action minutes and 90 message timestamps from the last hour.
+Their stable marks container is a keyed list (`data-stream-list`): new marks append, expired
+marks are removed, and existing marks patch alone. Append selectors guard the child ID, so
+replaying a partially received batch cannot duplicate it. Activity uses the same list protocol
+for turns, retaining its latest-turn window and every failure; the summary, latest turn and
+tab counts patch independently.
+
 A batch sends, for each region that changed, the smallest region around the change whose
 skeleton (its HTML with its own regions left out) is unchanged: one unit's state patches that
 unit's row, and a unit moving between sections the sections it left and joined. A stream renders its

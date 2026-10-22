@@ -8,7 +8,10 @@ use axum::{
         sse::{Event, KeepAlive},
     },
 };
-use datastar::prelude::{ExecuteScript, PatchElements, PatchSignals};
+use datastar::{
+    consts::ElementPatchMode,
+    prelude::{ExecuteScript, PatchElements, PatchSignals},
+};
 use futures_util::{Stream, stream};
 use serde::Deserialize;
 use sluice_model::{error::PublicError, ids::ProjectId};
@@ -27,7 +30,9 @@ use tokio::time::Instant;
 
 /// A part of a page a stream patches, by its element's id. Its HTML may mark parts of it as
 /// regions of their own, `<!--r:id-->` and `<!--/r:id-->` around the element with that id: a
-/// batch then sends only the smallest regions that changed (`Comparison::events`).
+/// batch then sends only the smallest regions that changed (`Comparison::events`). A region
+/// rooted in `data-stream-list` has keyed direct children: append/insert new children,
+/// patch changed children and remove expired ones. Surviving keys keep their order.
 #[derive(Clone, Debug)]
 pub struct PatchRegion {
     pub id: String,
@@ -67,13 +72,67 @@ fn split(html: &str) -> (String, Vec<(&str, &str)>) {
         let Some(end) = body.find(&end_marker) else {
             break;
         };
-        skeleton.push_str(&rest[..at + OPEN.len() + close + 3]);
-        skeleton.push_str(&end_marker);
+        skeleton.push_str(&rest[..at]);
+        // A keyed list's membership is diffed separately; ordinary regions keep their
+        // child positions in the skeleton, so structural changes still replace the parent.
+        if !keyed_list(html) {
+            skeleton.push_str(&rest[at..at + OPEN.len() + close + 3]);
+            skeleton.push_str(&end_marker);
+        }
         children.push((id, &body[..end]));
         rest = &body[end + end_marker.len()..];
     }
     skeleton.push_str(rest);
     (skeleton, children)
+}
+fn keyed_list(html: &str) -> bool {
+    html.split_once('>')
+        .is_some_and(|(tag, _)| tag.contains(" data-stream-list"))
+}
+#[derive(Clone, Debug)]
+struct DrawnRegion {
+    hash: u64,
+    children: Vec<String>,
+}
+type Drawn = BTreeMap<String, DrawnRegion>;
+/// Only fingerprints and child IDs, never HTML. A bounded shared history lets a new
+/// connection diff against a page render or the last fully acknowledged stream batch.
+/// A miss (eviction or server restart) safely falls back to replacing the root regions.
+#[derive(Default)]
+struct History {
+    entries: VecDeque<(String, Arc<Drawn>, usize)>,
+    bytes: usize,
+}
+fn history() -> &'static std::sync::Mutex<History> {
+    static HISTORY: std::sync::OnceLock<std::sync::Mutex<History>> = std::sync::OnceLock::new();
+    HISTORY.get_or_init(Default::default)
+}
+fn remember(version: &str, regions: &[PatchRegion]) {
+    let mut history = history().lock().unwrap_or_else(|e| e.into_inner());
+    if history.entries.iter().any(|(v, _, _)| v == version) {
+        return;
+    }
+    let mut drawn = Drawn::new();
+    for region in regions {
+        record(&region.id, region.html.as_str(), &mut drawn);
+    }
+    let bytes = drawn
+        .iter()
+        .map(|(id, r)| id.len() + 96 + r.children.iter().map(|c| c.len() + 24).sum::<usize>())
+        .sum::<usize>();
+    const BUDGET: usize = 8 * 1024 * 1024;
+    if bytes > BUDGET {
+        return;
+    }
+    while history.entries.len() >= 64 || history.bytes + bytes > BUDGET {
+        if let Some((_, _, bytes)) = history.entries.pop_front() {
+            history.bytes -= bytes;
+        }
+    }
+    history.bytes += bytes;
+    history
+        .entries
+        .push_back((version.to_owned(), Arc::new(drawn), bytes));
 }
 #[derive(Clone, Debug)]
 pub struct RenderedBatch {
@@ -93,10 +152,9 @@ impl RenderedBatch {
             without_clock(region.html.as_str(), &mut drawn);
             drawn.push(0);
         }
-        Self {
-            version: sluice_store::artifacts::fingerprint(&drawn),
-            regions,
-        }
+        let version = sluice_store::artifacts::fingerprint(&drawn);
+        remember(&version, &regions);
+        Self { version, regions }
     }
 }
 /// What the page's clock keeps, so the clock alone never changes a version: each tag that opens
@@ -219,20 +277,28 @@ impl StreamEvent {
         }
     }
 }
-/// This state belongs to one connection. Never retain it for reconnects.
+/// This comparison belongs to one connection, seeded from immutable version fingerprints.
 pub struct Comparison {
     client_version: String,
     current: Option<String>,
     /// Each region drawn last, by id: its skeleton's hash.
-    drawn: BTreeMap<String, u64>,
+    drawn: Arc<Drawn>,
     signal: VersionSignal,
 }
 impl Comparison {
     pub fn new(client_version: String, signal: VersionSignal) -> Self {
+        let drawn = history()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entries
+            .iter()
+            .find(|(version, _, _)| version == &client_version)
+            .map(|(_, drawn, _)| drawn.clone())
+            .unwrap_or_default();
         Self {
             client_version,
             current: None,
-            drawn: BTreeMap::new(),
+            drawn,
             signal,
         }
     }
@@ -251,15 +317,21 @@ impl Comparison {
         for region in &batch.regions {
             if region.id.starts_with('@') {
                 let hash = skeleton_hash(region.html.as_str());
-                if self.drawn.get(&region.id) != Some(&hash) {
+                if self.drawn.get(&region.id).map(|r| r.hash) != Some(hash) {
                     events.push(StreamEvent::Signals(PatchSignals::new(
                         region.html.as_str(),
                     )));
                 }
-                drawn.insert(region.id.clone(), hash);
+                drawn.insert(
+                    region.id.clone(),
+                    DrawnRegion {
+                        hash,
+                        children: vec![],
+                    },
+                );
                 continue;
             }
-            if first {
+            if first && self.drawn.is_empty() {
                 record(&region.id, region.html.as_str(), &mut drawn);
                 if send {
                     events.push(patch(&region.id, region.html.as_str()));
@@ -282,33 +354,71 @@ impl Comparison {
             )));
         }
         self.current = Some(batch.version);
-        self.drawn = drawn;
+        self.drawn = Arc::new(drawn);
         events
     }
-    fn diff(
-        &self,
-        id: &str,
-        html: &str,
-        drawn: &mut BTreeMap<String, u64>,
-        events: &mut Vec<StreamEvent>,
-    ) {
+    fn diff(&self, id: &str, html: &str, drawn: &mut Drawn, events: &mut Vec<StreamEvent>) {
         let (skeleton, children) = split(html);
         let hash = skeleton_hash(&skeleton);
-        if self.drawn.get(id) != Some(&hash) {
+        if self.drawn.get(id).map(|r| r.hash) != Some(hash) {
             record(id, html, drawn);
             events.push(patch(id, html));
             return;
         }
-        drawn.insert(id.to_owned(), hash);
-        for (child, html) in children {
-            self.diff(child, html, drawn, events);
+        drawn.insert(
+            id.to_owned(),
+            DrawnRegion {
+                hash,
+                children: children.iter().map(|(id, _)| (*id).to_owned()).collect(),
+            },
+        );
+        if keyed_list(html) {
+            for child in &self.drawn[id].children {
+                if !children.iter().any(|(id, _)| id == child) {
+                    events.push(StreamEvent::Elements(PatchElements::new_remove(format!(
+                        "#{child}"
+                    ))));
+                }
+            }
+        }
+        let list = keyed_list(html);
+        for (index, (child, html)) in children.iter().copied().enumerate() {
+            if list && !self.drawn.contains_key(child) {
+                record(child, html, drawn);
+                // A dropped connection can have applied an append before its version signal.
+                // Guard it by the stable child ID so replay never duplicates an element.
+                let next = children[index + 1..]
+                    .iter()
+                    .find(|(next, _)| self.drawn.contains_key(*next));
+                let (selector, mode) = match next {
+                    Some((next, _)) => (
+                        format!("#{id}:not(:has(> #{child})) > #{next}"),
+                        ElementPatchMode::Before,
+                    ),
+                    None => (
+                        format!("#{id}:not(:has(> #{child}))"),
+                        ElementPatchMode::Append,
+                    ),
+                };
+                events.push(StreamEvent::Elements(
+                    PatchElements::new(html).selector(selector).mode(mode),
+                ));
+            } else {
+                self.diff(child, html, drawn, events);
+            }
         }
     }
 }
 /// Note `html`'s skeleton and each of its regions' as drawn.
-fn record(id: &str, html: &str, drawn: &mut BTreeMap<String, u64>) {
+fn record(id: &str, html: &str, drawn: &mut Drawn) {
     let (skeleton, children) = split(html);
-    drawn.insert(id.to_owned(), skeleton_hash(&skeleton));
+    drawn.insert(
+        id.to_owned(),
+        DrawnRegion {
+            hash: skeleton_hash(&skeleton),
+            children: children.iter().map(|(id, _)| (*id).to_owned()).collect(),
+        },
+    );
     for (child, html) in children {
         record(child, html, drawn);
     }

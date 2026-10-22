@@ -89,16 +89,26 @@ async fn sql(f: &Fixture, statement: &'static str) {
         .unwrap();
 }
 
-#[tokio::test(flavor = "multi_thread")]
+#[tokio::test(start_paused = true)]
 async fn a_state_change_patches_only_the_regions_it_changed() {
-    let f = Fixture::new().await;
+    let mut f = Fixture::new().await;
+    f.dashboard = f
+        .dashboard
+        .with_clock(Clock::tokio(std::time::SystemTime::now()));
     let router = f.router();
     let path = format!("/projects/id/{}", f.id);
     let (_, page) = f.get(&path).await;
     // the plan draws no relations for a script to draw lines from
     assert!(!page.contains("class=\"board-edges\""));
-    let mut body = open(&router, &format!("{path}/stream")).await;
-    first_batch(&mut body).await;
+    let at = url::form_urlencoded::byte_serialize(
+        serde_json::json!({"ver": drawn_version(&page), "q": ""})
+            .to_string()
+            .as_bytes(),
+    )
+    .collect::<String>();
+    let mut body = open(&router, &format!("{path}/stream?datastar={at}")).await;
+    let first = first_batch(&mut body).await;
+    assert!(!selectors(&first).contains(&"#project-board"), "{first}");
     // beta-build stays failed, for another reason: only its item in Needs you and the board's
     // StepStatus say it
     let id = f.id;
@@ -160,6 +170,43 @@ async fn a_state_change_patches_only_the_regions_it_changed() {
         wire.len(),
         page.len()
     );
+    // A message makes just one new pulse mark. The existing marks must not travel again,
+    // including when it lands in the gap between drawing a page and connecting its stream.
+    let (_, page) = f.get(&path).await;
+    let at = url::form_urlencoded::byte_serialize(
+        serde_json::json!({"ver": drawn_version(&page), "q": ""})
+            .to_string()
+            .as_bytes(),
+    )
+    .collect::<String>();
+    let id = f.id;
+    let now = sluice_web::views::day::now();
+    f.writer.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute("INSERT INTO messages(id,project_id,thread,\"from\",\"to\",body,at) VALUES(880002,?1,'step-alpha-review','alpha-review','orchestrator','A fresh pulse.',?2)", (id.to_string(), sluice_web::views::rfc3339(now)))?;
+        tx.changed(Some(id), "messages");
+        Ok(())
+    }).await.unwrap();
+    let wire = first_batch(&mut body).await;
+    assert!(!selectors(&wire).contains(&"#pulse-alpha"), "{wire}");
+    assert!(wire.contains("data: mode append"), "{wire}");
+    assert_eq!(wire.matches("class=\"pk pk-m\"").count(), 1, "{wire}");
+    assert!(wire.len() < 6000, "{}: {wire}", wire.len());
+    let mut reconnect = open(&router, &format!("{path}/stream?datastar={at}")).await;
+    let wire = first_batch(&mut reconnect).await;
+    assert!(!selectors(&wire).contains(&"#project-board"), "{wire}");
+    assert!(wire.contains("data: mode append"), "{wire}");
+    // An unknown/evicted version still catches up safely.
+    let mut old = open(
+        &router,
+        &format!("{path}/stream?datastar=%7B%22ver%22%3A%22old%22%7D"),
+    )
+    .await;
+    assert!(selectors(&first_batch(&mut old).await).contains(&"#project-board"));
+    tokio::time::advance(Duration::from_secs(3601)).await;
+    let expired = first_batch(&mut body).await;
+    assert!(expired.contains("data: mode remove"), "{expired}");
+    assert!(expired.contains("#pulse-marks-alpha-said-"), "{expired}");
+    assert!(!selectors(&expired).contains(&"#pulse-alpha"), "{expired}");
 }
 
 #[tokio::test]

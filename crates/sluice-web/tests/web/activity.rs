@@ -269,7 +269,7 @@ async fn a_live_runs_open_turn_ticks_and_new_turns_arrive_over_its_stream() {
         .unwrap();
     let mut body = response.into_body().into_data_stream();
     let mut first = String::new();
-    while !first.contains("</article>") {
+    while !first.contains("\"stale\"") {
         first.push_str(std::str::from_utf8(&body.next().await.unwrap().unwrap()).unwrap());
     }
     let activity = section(&first);
@@ -293,18 +293,15 @@ async fn a_live_runs_open_turn_ticks_and_new_turns_arrive_over_its_stream() {
     // the rest of the run arrives: the next batch carries its new turns
     f.laid.write(usize::MAX);
     let mut next = String::new();
-    while !next.contains("</article>") {
+    while !next.contains("\"stale\"") {
         next.push_str(std::str::from_utf8(&body.next().await.unwrap().unwrap()).unwrap());
     }
-    let activity = section(&next);
-    assert_eq!(
-        turns(activity).len(),
-        6,
-        "the latest five and the failed first: {activity}"
-    );
-    assert!(activity.contains("id=\"act-r1-t8\""), "{activity}");
-    // the engine closed its last turn: nothing is open now
-    assert!(!activity.contains("is-running"), "{activity}");
+    assert!(!next.contains("data: selector #step-detail\n"), "{next}");
+    assert!(next.contains("data: mode append"), "{next}");
+    assert!(next.contains("id=\"act-r1-t8\""), "{next}");
+    // The failed first turn was already shown: it must not travel with the new turns.
+    assert!(!next.contains("id=\"act-r1-t1\""), "{next}");
+    assert!(!next.contains("is-running"), "{next}");
     drop(f.writer);
     drop(f.home);
 }
