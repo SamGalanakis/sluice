@@ -572,7 +572,7 @@ pub struct ProjectView {
     pub names: std::sync::Arc<sluice_runtime::naming::ProjectNaming>,
     /// Its open questions to the owner (`project.asks`) as asked: what Needs you says.
     pub questions: Vec<Question>,
-    /// How far this browser has looked at its finished units (`plan::seen_of`): the finish
+    /// How far the owner has looked at its finished units (stored on the project): the finish
     /// time of the last it marked seen; `None` before it ever did.
     #[serde(skip)]
     pub seen: Option<u64>,
@@ -1274,6 +1274,7 @@ pub fn load_board(
     let created = q.query_map([project.to_string()], |r| Ok((r.get::<_,String>(0)?,r.get::<_,i64>(1)? as u64)))?.collect::<std::result::Result<BTreeMap<_,_>,_>>()?;
     let mut last = last_messages(c, project, &board)?;
     let mut said = said_lately(c, project)?;
+    board.seen = c.query_row("SELECT history_seen FROM projects WHERE project_id=?1", [project.to_string()], |r| r.get::<_,i64>(0))?.try_into().ok().filter(|n| *n > 0);
     board.set_aside = sluice_store::messages::needs_set_aside(c, project)?;
     let cards = Cards::read(c, project)?;
     board.fallback = c.query_row(

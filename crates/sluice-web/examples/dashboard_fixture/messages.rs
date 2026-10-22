@@ -28,6 +28,14 @@ impl MessageCommands for FixtureCommands {
                         let reply = sluice_store::messages::reply_post(tx.sql(), m)?;
                         Ok(CommandReply::Receipt(post(tx, reply, &NoPlanInputs)?.receipt))
                     }
+                    CommandRequest::ReadNotes { marks, undo } => {
+                        sluice_store::messages::mark_notes(tx, marks, undo)?;
+                        Ok(CommandReply::Ack)
+                    }
+                    CommandRequest::HistorySeen { project, through, undo } => {
+                        sluice_store::messages::history_seen(tx, project, through, undo)?;
+                        Ok(CommandReply::Ack)
+                    }
                     CommandRequest::MarkRead(read) => {
                         sluice_store::messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)

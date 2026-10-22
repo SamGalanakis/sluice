@@ -179,6 +179,28 @@ pub async fn dispatch_ext<H: ExecutionHost>(
                 .await?;
             CommandReply::Ack
         }
+        CommandRequest::ReadNotes { marks, undo } => {
+            broker
+                .writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    messages::mark_notes(tx, marks, undo)
+                })
+                .await?;
+            CommandReply::Ack
+        }
+        CommandRequest::HistorySeen {
+            project,
+            through,
+            undo,
+        } => {
+            broker
+                .writer()
+                .write(RetrySafety::Idempotent, move |tx| {
+                    messages::history_seen(tx, project, through, undo)
+                })
+                .await?;
+            CommandReply::Ack
+        }
         CommandRequest::RecipeList { project } => {
             let home = broker.home().to_owned();
             data(

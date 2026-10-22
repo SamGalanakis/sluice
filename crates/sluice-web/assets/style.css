@@ -1687,20 +1687,34 @@ details.m-many[open] > .m-all { display: flex; flex-wrap: wrap; gap: 2px 14px; m
 li.m.q-done > .md, li.m.q-done > .m-body { opacity: 0.7; }
 .threads { display: grid; gap: 10px; }
 .threads > .item { margin: 0; }
-/* the inbox's sections on the grid: a question to the owner a swelled module, two to a row
-   from 900px of sheet, three past 2400px; one, the full width, on a phone */
-#messages-view > section, #messages-view > #inbox-items > section,
-#messages-view > details.read-today { margin-top: calc(30px * 1); }
-#messages-view > #inbox-items > section:first-child { margin-top: calc(22px * 1); }
+/* Messages is a single ruled list: full questions first, a compact row per note. */
+#messages-view > section, #messages-view > #inbox-items > section { margin-top: 24px; }
 #messages-view .sec-h { margin-bottom: 4px; }
-/* its questions and notes by the sheet's mode: one to a row to 900px, two from there, each at
-   its reading measure */
-.q-sheet { margin-top: 12px; }
-.q-sheet > .sheet { row-gap: calc(26px * 1); }
-@container sheet (min-width: 640px) and (max-width: 899.98px) { .q-sheet > .sheet > .mod { --take: 12; } }
-.q-sheet article.item { margin: 0; }
-.q-sheet .note-h a, .q-sheet .item > h3 a { text-decoration: none; }
-.q-sheet .note-h, .q-sheet .item > h3 { font-size: var(--text-lead); line-height: 1.3; font-weight: 600; }
+#messages-view .q-cards { display: block; }
+#messages-view .q-box { max-width: var(--measure); }
+#messages-view .q-card { padding: 18px 0; border-radius: 0; background: none; box-shadow: none; border-bottom: 1px solid var(--line); }
+#messages-view .q-k > sluice-menu > details.dm { right: 0; }
+#messages-view .message-questions > article { margin: 0; padding: 18px 0; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: none; }
+.message-notes { list-style: none; margin: 12px 0 0; padding: 0; }
+.message-notes > li { border-bottom: 1px solid var(--line); }
+.message-notes > li > a { display: flex; align-items: baseline; gap: 12px; min-height: 44px; padding: 14px 0; color: var(--ink); text-decoration: none; }
+.message-notes > li > a:hover { background: var(--wash); }
+.message-notes .notes-dot { flex: none; align-self: center; width: 5px; height: 5px; }
+.note-copy { display: grid; gap: 4px; min-width: 0; flex: 1; }
+.note-meta { color: var(--muted); font-size: var(--text-sm); }
+.note-meta a { color: inherit; }
+.note-preview { max-width: var(--measure); overflow-wrap: anywhere; }
+.message-notes time { flex: none; color: var(--muted); font: var(--text-mono)/1.5 var(--font-mono); }
+#undo-read { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+#messages-view .stopped-list { background: none; border: 0; border-radius: 0; }
+#messages-view .stopped-list > li { padding-left: 0; padding-right: 0; border-bottom: 1px solid var(--line); }
+#messages-view .stopped-list > li + li { border-top: 0; }
+@media (max-width: 720px) {
+  .message-notes > li > a { flex-wrap: wrap; gap: 4px 10px; }
+  .message-notes .note-copy { flex-basis: calc(100% - 20px); }
+  .message-notes time { margin-left: 15px; }
+  #messages-view button { min-height: 44px; }
+}
 
 details > summary { cursor: pointer; color: var(--muted); }
 details[open] > summary { margin-bottom: 6px; }
@@ -2219,8 +2233,6 @@ button.q-toggle.primary[aria-expanded="true"]:hover {
 li.closing, article.closing { opacity: .55; }
 /* a thread of notes: its name and project, its notes, then "Mark read" after them; read only
    when asked */
-.note-h { margin: 0; min-width: 0; }
-.note-end { margin: 12px 0 0; }
 button.mark-read { flex: none; }
 /* the notes marked read in the last day, kept under a fold that the store draws */
 details.read-today { margin-top: 24px; }

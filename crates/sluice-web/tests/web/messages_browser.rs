@@ -17,9 +17,9 @@ fn read_marks(f: &Fixture) -> Vec<sluice_model::commands::MarkRead> {
         .lock()
         .unwrap()
         .iter()
-        .filter_map(|r| match r {
-            CommandRequest::MarkRead(read) => Some(read.clone()),
-            _ => None,
+        .flat_map(|r| match r {
+            CommandRequest::ReadNotes { marks, undo: false } => marks.clone(),
+            _ => vec![],
         })
         .collect()
 }
@@ -64,14 +64,13 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
     let lanes = f.id;
     let f = std::sync::Arc::new(f);
     let checks = f.clone();
-    let rt = tokio::runtime::Handle::current();
     tokio::task::spawn_blocking(move || {
         let f = checks;
         let base = format!("http://{addr}");
         let mut browser = Chrome::open(&format!("{base}/inbox")).unwrap();
         browser.viewport(390, "light").unwrap();
         browser
-            .wait("document.readyState === 'complete' && document.querySelectorAll('article.note').length === 2")
+            .wait("document.readyState === 'complete' && document.querySelectorAll('li.note').length === 2")
             .unwrap();
         // on screen and scrolled past for well over the old two seconds: still unread
         browser.eval("window.scrollTo(0, document.body.scrollHeight)").unwrap();
@@ -83,25 +82,19 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
         assert!(read_marks(&f).is_empty(), "seeing a note never marks it read");
         drop(browser);
         let mut browser = Chrome::open(&format!("{base}/inbox")).unwrap();
-        browser.wait("document.readyState === 'complete' && document.querySelectorAll('article.note').length === 2").unwrap();
-        // its card's Mark read marks that thread, through what the page drew of it
-        browser
-            .wait("[...document.querySelectorAll('article.note form.mark-read button')].every(b => b.checkVisibility())")
-            .unwrap();
-        browser
-            .eval("window.marked=false; document.addEventListener('datastar-fetch', e => { if (e.detail.type === 'finished' && e.detail.el.matches?.('form.mark-read')) marked = true; }); [...document.querySelectorAll('article.note')].find(a => a.textContent.includes('The lane landed')).querySelector('form.mark-read button').click()")
-            .unwrap();
-        browser.wait("marked").unwrap();
-        let marks = read_marks(&f);
-        assert_eq!(marks.len(), 1, "{marks:?}");
-        assert_eq!((marks[0].identity.as_str(), marks[0].thread.as_str()), ("owner", "notes"));
-        // the coordinator takes the mark (the fixture records commands; the store applies it)
-        let read = marks[0].clone();
-        let writer = f.writer.clone();
-        rt.block_on(writer.write(RetrySafety::Idempotent, move |tx| {
-            sluice_store::messages::mark_read(tx, read)
-        }))
-        .unwrap();
+        browser.wait("document.readyState === 'complete' && document.querySelectorAll('li.note').length === 2").unwrap();
+        // One action reads the page's displayed threads, with Undo, never a button per note.
+        assert_eq!(browser.eval("document.querySelectorAll('section.notes form.mark-read button').length").unwrap(), 1);
+        browser.eval("document.querySelector('#mark-all-read button').click()").unwrap();
+        browser.wait("document.querySelectorAll('li.note').length === 0 && !!document.querySelector('#undo-read button')").unwrap();
+        assert_eq!(read_marks(&f).len(), 2);
+        browser.eval("document.querySelector('#undo-read button').click()").unwrap();
+        browser.wait("document.querySelectorAll('li.note').length === 2 && !document.querySelector('#undo-read')").unwrap();
+        // The thread has its own read action, without reading it on navigation.
+        browser.navigate(&format!("{base}/projects/id/{lanes}/thread?thread=notes")).unwrap();
+        browser.wait("!!document.querySelector('.thread-of form.mark-read button')").unwrap();
+        browser.eval("document.querySelector('.thread-of form.mark-read button').click()").unwrap();
+        browser.wait("!!document.querySelector('#undo-read button') && !document.querySelector('.thread-of form.mark-read')").unwrap();
         // Reloading the inbox keeps the remaining note and links to the full read history;
         // it never ships the marked note in a hidden disclosure.
         for _ in 0..2 {
@@ -122,7 +115,7 @@ async fn slow_chromium_a_note_is_read_only_when_the_owner_asks_and_times_survive
         browser.send("Emulation.setVirtualTimePolicy", serde_json::json!({"policy":"advance", "budget":2600})).unwrap();
         browser.wait(&format!("performance.now() >= {}", before + 2600.0)).unwrap();
         browser.eval("Promise.all(window.readRequests)").unwrap();
-        assert_eq!(read_marks(&f).len(), 1, "opening a thread marks nothing");
+        assert_eq!(read_marks(&f).len(), 3, "opening a thread marks nothing");
         assert_eq!(
             browser.eval("(b => b && b.checkVisibility() ? b.textContent : null)(document.querySelector('.thread-of form.mark-read button'))").unwrap(),
             "Mark 1 note read"

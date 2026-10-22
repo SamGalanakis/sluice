@@ -415,8 +415,47 @@ pub struct InboxView {
     pub questions: Vec<MessageItem>,
     pub threads: Vec<ThreadView>,
     pub older_notes: Option<i64>,
+    pub read_undo: Vec<(ProjectId, String, i64)>,
 }
 impl InboxView {
+    /// Notes remain individual rows even when several belong to the same conversation.
+    pub fn notes(&self) -> Vec<&MessageItem> {
+        let mut notes: Vec<_> = self.threads.iter().flat_map(|t| &t.messages).collect();
+        notes.sort_by_key(|m| std::cmp::Reverse(m.id()));
+        notes
+    }
+    pub fn read_form(&self, undo: bool) -> TrustedHtml {
+        let marks: Vec<_> = if undo {
+            self.read_undo.clone()
+        } else {
+            self.threads
+                .iter()
+                .map(|t| (t.project, t.thread.clone(), t.through))
+                .collect()
+        };
+        if marks.is_empty() {
+            return TrustedHtml::default();
+        }
+        let id = if undo { "undo-read" } else { "mark-all-read" };
+        let mut html = super::ui::post_form(id, "mark-read", "/messages/read");
+        for (project, thread, through) in marks {
+            html.push_str(&format!(
+                "<input type=\"hidden\" name=\"m\" value=\"{project}/{through}/{}\">",
+                super::ui::esc(&thread)
+            ));
+        }
+        if undo {
+            html.push_str("<input type=\"hidden\" name=\"undo\" value=\"true\"><span class=\"meta\">Marked read · </span>");
+        }
+        html.push_str(if undo {
+            "<button class=\"quiet\">Undo</button>"
+        } else {
+            "<button class=\"quiet\">Mark all read</button>"
+        });
+        html.push_str(&super::ui::form_said(id));
+        html.push_str("</form>");
+        TrustedHtml::owned(html)
+    }
     /// Its `h1`: a project's inbox is its "Messages" (the nav's word for the section), so it
     /// never reads as the global "Inbox" beside it.
     pub fn title(&self) -> &str {
@@ -576,11 +615,12 @@ impl InboxView {
     pub fn version(&self) -> String {
         sluice_store::artifacts::fingerprint(
             format!(
-                "{}{:?}{:?}{:?}",
+                "{}{:?}{:?}{:?}{:?}",
                 self.nav.version(),
                 self.questions,
                 self.threads,
-                self.older_notes
+                self.older_notes,
+                self.read_undo
             )
             .as_bytes(),
         )
@@ -1657,6 +1697,8 @@ pub async fn load_page(
                 MessageView::Inbox => {}
                 MessageView::Questions | MessageView::History => {}
             }
+            let mut q = sql.prepare_cached("SELECT r.project_id,r.thread,r.cursor FROM readers r JOIN projects p ON p.project_id=r.project_id WHERE p.deleted_at IS NULL AND identity='owner' AND stream='owner' AND (?1 IS NULL OR r.project_id=?1) AND (?2 IS NULL OR thread=?2) AND json_extract(read_undo,'$.through')=cursor AND json_extract(read_undo,'$.at')>=strftime('%Y-%m-%dT%H:%M:%f','now','-10 minutes') ORDER BY r.project_id,thread LIMIT 50")?;
+            let read_undo = q.query_map((project.map(|p|p.to_string()), if view == MessageView::Thread { thread.clone() } else { None }), |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,i64>(2)?)))?.collect::<Result<Vec<_>,_>>()?.into_iter().filter_map(|(p,t,n)| Some((p.parse().ok()?,t,n))).collect();
             Ok(InboxView {
                 nav,
                 project,
@@ -1664,6 +1706,7 @@ pub async fn load_page(
                 questions,
                 threads,
                 older_notes,
+                read_undo,
             })
         })
         .await

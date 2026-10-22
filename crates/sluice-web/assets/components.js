@@ -602,8 +602,8 @@ define("sluice-banner", {
       });
       return;
     }
-    // the page's stream is what main opens and what reopens it on new signals (the plan's find,
-    // Mark as seen: `data-reopens-stream`); a reopening ends the request before it on purpose
+    // the page's stream is what main opens and what reopens it on new signals (the plan's find:
+    // `data-reopens-stream`); a reopening ends the request before it on purpose
     // (Datastar's requestCancellation), so the stream stopped only when none is left open
     const opens = (el) => el === document.querySelector("main#content") || el?.hasAttribute?.("data-reopens-stream");
     let phase = "live", open = 0;

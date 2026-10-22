@@ -1,4 +1,4 @@
-//! Finished units, in bounded pages, with a browser-local read cursor.
+//! Finished units, in bounded pages, with a shared project read cursor.
 use super::board::{ProjectView, UnitView};
 use super::ui::{self, Shown, esc};
 use super::{DashboardState, Frame, NavView, TrustedHtml, Viewer};
@@ -7,7 +7,7 @@ use axum::Extension;
 use super::board::Registry;
 use axum::{
     extract::{Form, Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::{Html, IntoResponse, Response, Sse},
 };
 use serde::Deserialize;
@@ -15,26 +15,6 @@ use sluice_model::{error::PublicError, ids::ProjectId, shown::Band};
 use std::fmt::Write;
 
 pub const PAGE_SIZE: usize = 50;
-/// The cookie that keeps how far this browser has looked at a project's finished units.
-pub fn seen_cookie(project: ProjectId) -> String {
-    format!("sluice_seen_{project}")
-}
-/// What a request's cookie says it has seen of a project: the finish time (seconds since the
-/// epoch) of the last finished unit it marked seen.
-pub fn seen_of(headers: &HeaderMap, project: ProjectId) -> Option<u64> {
-    let name = seen_cookie(project);
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|c| c.to_str().ok())
-        .unwrap_or("")
-        .split(';')
-        .filter_map(|c| c.trim().split_once('='))
-        .find(|(n, _)| *n == name)
-        .and_then(|(_, v)| v.parse().ok())
-        // 0 is the look undone: everything finished lately again
-        .filter(|seen| *seen > 0)
-}
-
 #[derive(Clone, Default, Deserialize)]
 pub struct HistoryQuery {
     #[serde(default)]
@@ -43,6 +23,8 @@ pub struct HistoryQuery {
 #[derive(Deserialize)]
 pub struct SeenForm {
     pub through: u64,
+    #[serde(default)]
+    pub undo: bool,
 }
 /// A stopped unit belongs here once all its work is terminal; a retry takes it back out.
 fn finished(unit: &UnitView) -> bool {
@@ -65,6 +47,9 @@ pub fn finished_today(view: &ProjectView) -> usize {
                 && super::timestamp(u.finished()).is_some_and(|t| local_day(t, view.zone) == today)
         })
         .count()
+}
+pub fn has_unseen(view: &ProjectView) -> bool {
+    view.units.iter().any(|u| finished(u) && super::timestamp(u.finished()).is_some_and(|at| at > view.seen.unwrap_or(0)))
 }
 fn day_label(at: u64, now: u64, zone: i64) -> String {
     let day = local_day(at, zone);
@@ -132,10 +117,7 @@ fn body(view: &ProjectView, page: usize) -> TrustedHtml {
         .and_then(|u| super::timestamp(u.finished()))
         .unwrap_or(0)
         .max(view.seen.unwrap_or(0));
-    let mut out = format!(
-        "<div id=\"history-view\" data-reopens-stream data-on-signal-patch=\"{}\" data-on-signal-patch-filter=\"{{include: /^seen$/}}\">",
-        esc(&ui::stream_reopen(&format!("{href}/stream?page={page}")))
-    );
+    let mut out = "<div id=\"history-view\">".to_owned();
     if !units.is_empty() {
         let _ = write!(
             out,
@@ -146,7 +128,7 @@ fn body(view: &ProjectView, page: usize) -> TrustedHtml {
         if let Some(seen) = view.seen {
             let _ = write!(
                 out,
-                "{}<input type=\"hidden\" name=\"through\" value=\"0\"><span class=\"meta\">Seen through {} · <button class=\"quiet\">Undo</button></span>{}</form>",
+                "{}<input type=\"hidden\" name=\"through\" value=\"{seen}\"><input type=\"hidden\" name=\"undo\" value=\"true\"><span class=\"meta\">Seen through {} · <button class=\"quiet\">Undo</button></span>{}</form>",
                 ui::post_form("undo-seen", "seen-form", &format!("{href}/seen")),
                 ui::clock(&super::rfc3339(seen)),
                 ui::form_said("undo-seen")
@@ -181,7 +163,7 @@ fn body(view: &ProjectView, page: usize) -> TrustedHtml {
             unit.heading(),
             unit.steps.iter().map(|s| s.shown()).min().unwrap_or(Shown::Succeeded),
             &engine,
-            view.seen.is_some_and(|seen| at > seen),
+            at > view.seen.unwrap_or(0),
         ));
     }
     if last_day.is_some() {
@@ -212,13 +194,9 @@ async fn draw(
     project: ProjectId,
     page: usize,
     headers: &HeaderMap,
-    seen: Option<u64>,
     registry: Option<&Registry>,
 ) -> Result<(super::DashboardSnapshot, ProjectView, RenderedBatch), PublicError> {
     let (shared, mut view) = super::board::snapshot(state, project, registry).await?;
-    view.seen = seen
-        .or_else(|| seen_of(headers, project))
-        .filter(|s| *s > 0);
     view.zone = super::day::zone(headers);
     let nav = NavView::new(&shared, Some(project), "history")?;
     let mut regions = vec![PatchRegion::new("history-view", body(&view, page))];
@@ -236,7 +214,7 @@ async fn page(
     headers: HeaderMap,
 ) -> Response {
     let drawn = async {
-        let (shared, view, batch) = draw(&state, project, query.page, &headers, None, registry.as_ref().map(|r| &r.0)).await?;
+        let (shared, view, batch) = draw(&state, project, query.page, &headers, registry.as_ref().map(|r| &r.0)).await?;
         let href = format!("{}/history", view.href());
         let nav = NavView::new(&shared, Some(project), "history")?;
         let frame = Frame {
@@ -246,7 +224,6 @@ async fn page(
                 &TrustedHtml::default(),
                 &TrustedHtml::default(),
             ),
-            signals: serde_json::Map::from_iter([("seen".into(), view.seen.unwrap_or(0).into())]),
             ..Frame::default()
         };
         super::render_framed(
@@ -276,14 +253,13 @@ async fn stream(
     headers: HeaderMap,
 ) -> Response {
     let version = query.version(VersionSignal::Page);
-    let seen = query.number("seen");
     let watch = state.watch(Some(project));
     let stop = state.stop.clone();
     let loader = move || {
         let state = state.clone();
         let headers = headers.clone();
         let registry = registry.clone();
-        async move { Ok(draw(&state, project, page.page, &headers, seen, registry.as_ref().map(|r| &r.0)).await?.2) }
+        async move { Ok(draw(&state, project, page.page, &headers, registry.as_ref().map(|r| &r.0)).await?.2) }
     };
     Sse::new(crate::streams::page_events(
         watch,
@@ -304,11 +280,8 @@ pub fn registration() -> super::PageRegistration {
                     "/projects/id/{project}/history/stream",
                     axum::routing::get(stream),
                 )
-                .route(
-                    "/projects/id/{project}/history/seen",
-                    axum::routing::post(mark_seen),
-                )
                 .with_state(state.dashboard.clone())
+                .merge(state.messages.clone().map(|messages| axum::Router::new().route("/projects/id/{project}/history/seen", axum::routing::post(mark_seen)).with_state(messages)).unwrap_or_default())
         },
         nav: |project| {
             project
@@ -327,27 +300,13 @@ pub fn registration() -> super::PageRegistration {
 }
 
 pub async fn mark_seen(
+    State(state): State<super::inbox::MessageState>,
     Path(project): Path<ProjectId>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Form(form): Form<SeenForm>,
 ) -> Response {
-    let mut response = match super::write::form(&headers) {
-        Some(id) => super::write::events([
-            super::write::notice(&id, ""),
-            crate::streams::StreamEvent::Signals(datastar::prelude::PatchSignals::new(
-                serde_json::json!({ "seen": form.through }).to_string(),
-            )),
-        ]),
-        None => StatusCode::NO_CONTENT.into_response(),
-    };
-    let cookie = format!(
-        "{}={}; Path=/; Max-Age=34560000; SameSite=Lax",
-        seen_cookie(project),
-        form.through
-    );
-    response.headers_mut().append(
-        axum::http::header::SET_COOKIE,
-        cookie.parse().expect("an ASCII cookie"),
-    );
-    response
+    match state.commands.command(sluice_model::commands::CommandRequest::HistorySeen { project, through: form.through, undo: form.undo }).await {
+        Ok(_) => super::write::done(&headers),
+        Err(error) => super::write::failed(&headers, error),
+    }
 }

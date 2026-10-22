@@ -50,12 +50,35 @@ impl board::RegistrySource for Registry {
     }
 }
 /// Records what the dashboard asks the coordinator, and answers a say with a receipt.
-#[derive(Default)]
-pub struct Commands(pub Mutex<Vec<CommandRequest>>);
+pub struct Commands(pub Mutex<Vec<CommandRequest>>, Writer);
 impl MessageCommands for Commands {
     fn command(&self, request: CommandRequest) -> CommandFuture<'_> {
-        self.0.lock().unwrap().push(request);
-        Box::pin(async {
+        self.0.lock().unwrap().push(request.clone());
+        let writer = self.1.clone();
+        Box::pin(async move {
+            match request {
+                CommandRequest::HistorySeen {
+                    project,
+                    through,
+                    undo,
+                } => {
+                    writer
+                        .write(RetrySafety::Idempotent, move |tx| {
+                            sluice_store::messages::history_seen(tx, project, through, undo)
+                        })
+                        .await?;
+                    return Ok(CommandReply::Ack);
+                }
+                CommandRequest::ReadNotes { marks, undo } => {
+                    writer
+                        .write(RetrySafety::Idempotent, move |tx| {
+                            sluice_store::messages::mark_notes(tx, marks, undo)
+                        })
+                        .await?;
+                    return Ok(CommandReply::Ack);
+                }
+                _ => {}
+            }
             Ok(CommandReply::Receipt(MessageReceipt {
                 id: MessageId(9),
                 to: "@lash-f4".into(),
@@ -177,11 +200,11 @@ impl Fixture {
         );
         Self {
             _home: home,
+            commands: Arc::new(Commands(Mutex::default(), writer.clone())),
             writer,
             id,
             plain,
             dashboard,
-            commands: Arc::default(),
         }
     }
     /// Another project, `name`, with the plan `doc` and the given steps' statuses.

@@ -24,6 +24,13 @@ pub(crate) const SCHEMA: &str = include_str!("../migrations/0004.sql");
 pub(crate) const TABLES: i64 = 27;
 /// Columns added after schema 4 homes exist. Earlier additions are folded into its DDL.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    ("projects", "history_seen", "INTEGER NOT NULL DEFAULT 0"),
+    (
+        "projects",
+        "history_seen_previous",
+        "INTEGER NOT NULL DEFAULT 0",
+    ),
+    ("readers", "read_undo", "TEXT"),
     ("projects", "settings_undo", "TEXT NOT NULL DEFAULT '{}'"),
     ("runs", "restart_after", "INTEGER"),
     // JSON remains authoritative, including writes from pinned older releases. Generated

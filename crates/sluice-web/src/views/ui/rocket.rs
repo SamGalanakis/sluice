@@ -501,14 +501,6 @@ pub fn conversation_open(id: &str, start: &str) -> TrustedHtml {
 pub fn conversation_close() -> TrustedHtml {
     Host::new("sluice-conversation").close()
 }
-/// "Mark all read" over a page's notes: it sends each note's own Mark read in its section.
-pub fn mark_all() -> TrustedHtml {
-    TrustedHtml::owned(
-        "<button type=\"button\" class=\"mark-all\" data-on:click=\"el.closest('section').querySelectorAll('form.mark-read').forEach((f) =&gt; f.requestSubmit())\">Mark all read</button>"
-            .into(),
-    )
-}
-
 /// A question's answer area: its Answer and Close, and the box Answer opens.
 pub fn answer_open() -> TrustedHtml {
     Host::new("sluice-answer").open()

@@ -1309,7 +1309,8 @@ impl<'a> Plan<'a> {
         out.push_str(&region("plan-roster", &self.roster_html()));
         let today = super::history::finished_today(self.view);
         if today > 0 {
-            out.push_str(&format!("<p class=\"plan-history meta\">{today} finished today · <a href=\"{}/history\">History →</a></p>", esc(&self.view.href())));
+            let unseen = super::history::has_unseen(self.view);
+            out.push_str(&format!("<p class=\"plan-history meta\">{today} finished today{} · <a href=\"{}/history\">History →</a></p>", if unseen { " <span class=\"history-new\" aria-label=\"Finished since you looked\">·</span>" } else { "" }, esc(&self.view.href())));
         }
         out.push_str("</div>");
         if !self.done.is_empty()

@@ -1657,6 +1657,15 @@ pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<Messag
     if read.through.0 < 0 || read.identity.trim().is_empty() {
         return Err(invalid("read identity and watermark are invalid"));
     }
+    let previous = reader(
+        tx.sql(),
+        read.project,
+        &read.identity,
+        OWNER_STREAM,
+        &read.thread,
+    )?
+    .cursor
+    .0;
     // A global watermark is clamped to the last actually existing message in this thread.
     let watermark: i64 = tx.sql().query_row(
         "SELECT coalesce(max(id),0) FROM messages WHERE project_id=?1 AND thread=?2 AND id<=?3",
@@ -1666,6 +1675,10 @@ pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<Messag
     tx.sql().execute("INSERT INTO readers(project_id,identity,stream,thread,cursor) VALUES (?1,?2,'owner',?3,?4) ON CONFLICT(project_id,identity,stream,thread) DO UPDATE SET cursor=max(cursor,excluded.cursor)",params![read.project.to_string(),read.identity,read.thread,watermark])?;
     // each message to the reader it takes off the unread list, stamped once with when
     tx.sql().execute("UPDATE messages SET read_at=?5 WHERE project_id=?1 AND thread=?2 AND \"to\"=?3 AND id<=?4 AND read_at IS NULL",params![read.project.to_string(),read.thread,read.identity,watermark,now()?])?;
+    if watermark > previous {
+        let undo = serde_json::json!({"previous": previous, "through": watermark, "at": now()?});
+        tx.sql().execute("UPDATE readers SET read_undo=?4 WHERE project_id=?1 AND identity=?2 AND stream='owner' AND thread=?3", params![read.project.to_string(), read.identity, read.thread, undo.to_string()])?;
+    }
     changed(tx, read.project);
     Ok(MessageId(
         reader(
@@ -1678,6 +1691,57 @@ pub fn mark_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<Messag
         .cursor
         .0,
     ))
+}
+
+/// A page's explicit read or Undo is atomic across its displayed threads and projects.
+pub fn mark_notes(tx: &mut WriteTransaction<'_>, marks: Vec<MarkRead>, undo: bool) -> Result<()> {
+    if marks.is_empty() || marks.len() > 50 {
+        return Err(invalid("name between 1 and 50 threads"));
+    }
+    for mark in marks {
+        if undo {
+            undo_read(tx, mark)?;
+        } else {
+            mark_read(tx, mark)?;
+        }
+    }
+    Ok(())
+}
+
+/// Restore only the last explicit read, while it still matches the page and is recent.
+fn undo_read(tx: &mut WriteTransaction<'_>, read: MarkRead) -> Result<()> {
+    let previous: Option<i64> = tx.sql().query_row(
+        "SELECT json_extract(read_undo,'$.previous') FROM readers WHERE project_id=?1 AND identity=?2 AND stream='owner' AND thread=?3 AND cursor=?4 AND json_extract(read_undo,'$.through')=?4 AND json_extract(read_undo,'$.at')>=strftime('%Y-%m-%dT%H:%M:%f','now','-10 minutes')",
+        params![read.project.to_string(), read.identity, read.thread, read.through.0], |r| r.get(0)
+    ).optional()?.flatten();
+    let Some(previous) = previous else {
+        return Err(conflict("the read mark changed or Undo expired"));
+    };
+    tx.sql().execute("UPDATE readers SET cursor=?4,read_undo=NULL WHERE project_id=?1 AND identity=?2 AND stream='owner' AND thread=?3", params![read.project.to_string(),read.identity,read.thread,previous])?;
+    tx.sql().execute("UPDATE messages SET read_at=NULL WHERE project_id=?1 AND thread=?2 AND \"to\"=?3 AND id>?4 AND id<=?5", params![read.project.to_string(),read.thread,read.identity,previous,read.through.0])?;
+    changed(tx, read.project);
+    Ok(())
+}
+
+/// History is shared across the owner's devices. An old page may advance, never regress it;
+/// Undo restores the previous mark only if no other client has advanced it since.
+pub fn history_seen(
+    tx: &mut WriteTransaction<'_>,
+    project: ProjectId,
+    through: u64,
+    undo: bool,
+) -> Result<()> {
+    let through = i64::try_from(through).map_err(|_| invalid("seen watermark is too large"))?;
+    resolve_project(tx.sql(), &sluice_model::ids::ProjectSelector::Id(project))?;
+    if undo {
+        if tx.sql().execute("UPDATE projects SET history_seen=history_seen_previous,history_seen_previous=0 WHERE project_id=?1 AND history_seen=?2 AND history_seen>0", params![project.to_string(),through])? == 0 {
+            return Err(conflict("the seen mark changed; reload before Undo"));
+        }
+    } else {
+        tx.sql().execute("UPDATE projects SET history_seen_previous=history_seen,history_seen=?2 WHERE project_id=?1 AND history_seen<?2", params![project.to_string(),through])?;
+    }
+    tx.changed(Some(project), "history");
+    Ok(())
 }
 
 pub fn orchestrator_read(

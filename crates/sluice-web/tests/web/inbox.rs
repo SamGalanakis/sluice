@@ -76,6 +76,18 @@ impl MessageCommands for Commands {
                             messages::post(tx, reply, &TypedInputs)?.receipt,
                         ))
                     }
+                    CommandRequest::ReadNotes { marks, undo } => {
+                        sluice_store::messages::mark_notes(tx, marks, undo)?;
+                        Ok(CommandReply::Ack)
+                    }
+                    CommandRequest::HistorySeen {
+                        project,
+                        through,
+                        undo,
+                    } => {
+                        sluice_store::messages::history_seen(tx, project, through, undo)?;
+                        Ok(CommandReply::Ack)
+                    }
                     CommandRequest::MarkRead(read) => {
                         messages::mark_read(tx, read)?;
                         Ok(CommandReply::Ack)
@@ -259,6 +271,51 @@ async fn p605_views_keep_questions_separate_and_advance_only_the_rendered_thread
     assert_eq!(page.questions.len(), 1);
     assert_eq!(page.threads.len(), 1);
     assert_eq!(page.threads[0].messages[0].id(), b);
+    // Undo affects only the last explicit read; a second device's newer read must survive it.
+    let later = post(
+        &writer,
+        project,
+        serde_json::json!({"thread":"a","body":"A newer note"}),
+    )
+    .await;
+    let undo = |through: i64, undo: bool| {
+        let router = router.clone();
+        async move {
+            router
+                .oneshot(
+                    Request::post(format!("/projects/id/{project}/messages/read"))
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(format!(
+                            "thread=a&through={through}&undo={undo}"
+                        )))
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    assert_eq!(undo(later, false).await, StatusCode::NO_CONTENT);
+    assert_eq!(undo(a, true).await, StatusCode::CONFLICT);
+    assert_eq!(undo(later, true).await, StatusCode::NO_CONTENT);
+    let page = threads::load(
+        &state.dashboard.reads,
+        Some(project),
+        MessageView::Inbox,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        page.notes()
+            .iter()
+            .filter(|m| m.message.thread == "a")
+            .map(|m| m.id())
+            .collect::<Vec<_>>(),
+        [later]
+    );
+    // The earlier note was already read; Undo restores the actual previous watermark.
+    assert!(!page.notes().iter().any(|m| m.id() == a));
     let questions = threads::load(
         &state.dashboard.reads,
         Some(project),
@@ -270,7 +327,7 @@ async fn p605_views_keep_questions_separate_and_advance_only_the_rendered_thread
     assert_eq!(questions.questions.len(), 2);
     assert!(questions.threads.is_empty());
     assert!(
-        matches!(&commands.requests.lock().unwrap()[0], CommandRequest::MarkRead(r) if r.identity == "owner")
+        matches!(&commands.requests.lock().unwrap()[0], CommandRequest::ReadNotes { marks, undo: false } if marks[0].identity == "owner")
     );
 }
 #[tokio::test]

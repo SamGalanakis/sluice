@@ -59,6 +59,7 @@ pub fn router(state: MessageState) -> Router {
         )
         .route("/projects/id/{project}/messages/read", post(mark_read))
         .route("/projects/id/{project}/messages", post(post_message))
+        .route("/messages/read", post(read_many))
         .route("/messages/close", post(close_many))
         .route("/messages/reopen", post(reopen_many))
         .with_state(state)
@@ -425,6 +426,8 @@ async fn change_many(
 struct ReadBody {
     thread: String,
     through: i64,
+    #[serde(default)]
+    undo: bool,
 }
 /// A note's Mark read (`ui::mark_read`): its thread read through the watermark its page drew.
 async fn mark_read(
@@ -443,14 +446,40 @@ async fn mark_read(
     }
     match state
         .commands
-        .command(CommandRequest::MarkRead(MarkRead {
+        .command(CommandRequest::ReadNotes { marks: vec![MarkRead {
             project,
             identity: "owner".into(),
             thread: body.thread,
             through: MessageId(body.through),
-        }))
+        }], undo: body.undo })
         .await
     {
+        Ok(_) => super::write::done(&headers),
+        Err(error) => super::write::failed(&headers, error),
+    }
+}
+
+/// One explicit action for the displayed page, all its thread watermarks in one transaction.
+async fn read_many(State(state): State<MessageState>, headers: HeaderMap, body: Bytes) -> Response {
+    let mut marks = Vec::new();
+    let mut undo = false;
+    for (key, value) in url::form_urlencoded::parse(&body) {
+        if key == "undo" { undo = value == "true"; }
+        if key != "m" { continue; }
+        let mut parts = value.splitn(3, '/');
+        let parsed = (|| Some(MarkRead {
+            project: parts.next()?.parse().ok()?,
+            through: MessageId(parts.next()?.parse::<i64>().ok().filter(|n| *n >= 0)?),
+            thread: parts.next()?.to_owned(),
+            identity: "owner".into(),
+        }))();
+        let Some(mark) = parsed else { return super::write::failed(&headers, PublicError::BadRequest { message: "invalid read mark".into() }); };
+        marks.push(mark);
+    }
+    if marks.is_empty() || marks.len() > 50 {
+        return super::write::failed(&headers, PublicError::BadRequest { message: "name between 1 and 50 threads".into() });
+    }
+    match state.commands.command(CommandRequest::ReadNotes { marks, undo }).await {
         Ok(_) => super::write::done(&headers),
         Err(error) => super::write::failed(&headers, error),
     }

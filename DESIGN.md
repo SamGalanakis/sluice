@@ -439,14 +439,15 @@ so a change patches what it moved and nothing else.
   step view.
 - **History** (the project tab next to Plan): one compact, linked row per finished unit, newest
   first: outcome glyph in its existing tone, engine chip, one-line title with an ellipsis, a
-  quiet dot for work finished since the browser's last look, faint finish time and duration at
+  quiet dot for work finished since the owner's shared last look, faint finish time and duration at
   the right. Group by “Today”, “Yesterday”, then “Oct 20” (year when older). Each page renders
   at most 50 rows, with Newer and Older links. Mark as seen and Seen through · Undo live above
-  this list; marking removes the dots, preserving all rows and day groups. Nothing finished:
+  this list; marking removes the dots, preserving all rows and day groups. The project keeps the mark
+  on the server across devices; Undo restores its previous mark unless another client advanced it. Nothing finished:
   “Nothing finished yet”. On a phone the row keeps one line, a 44px target and a shrinking title;
   Mark as seen, Undo and the pagination links also have 44px targets.
 - **Finished today**: a quiet “N finished today · History →” directly below At work, only when
-  at least one unit finished on the reader's current day. The default Plan has no finished rows;
+  at least one unit finished on the reader's current day, with the same quiet unread dot as History. The default Plan has no finished rows;
   finished work belongs to History. Legacy `show=done`, searches and recipe filters link
   to History instead of including a Done grid.
 - **The board column** (a project with a board, Both from 1280px): the board's document and its
@@ -543,7 +544,7 @@ for each.
   [Attributes: data-signals](https://data-star.dev/reference/attributes)). The page's
   signals are only what its server needs back or what a binding shows: `ver` and `stale` (the
   version the page holds), `theme` and `types` (display preferences), `tab` (the chosen tab),
-  `q` (the plan's find), `seen` (History's read cursor), the drawer's `step` and `sver`, each
+  `q` (the plan's find), the drawer's `step` and `sver`, each
   form's busy indicator (`_busy…`, local: Datastar sends no signal whose name starts with `_`)
   and the icon field's chosen file name (`_iconfile`). Inside a Rocket host a page-wide signal is
   bound with `__root` (`data-bind:theme__root`, `data-indicator__root`), which Rocket leaves
@@ -552,8 +553,8 @@ for each.
   ([Actions: @get](https://data-star.dev/reference/actions), which sends the page's
   signals with every request). The plan's stream is one address (`stream_href`, its `?view=` and
   `show=` as drawn); the find (`data-bind:q__root`, `data-on:input__debounce.200ms`) changes its
-  signal and opens the stream again. History's Mark as seen does the same with `seen` on its
-  own stream address, keeping `?page=`. The open one is ended by Datastar's
+  signal and opens the stream again. History's seen mark is server state: its write wakes the
+  existing History and Plan streams on every device. The open one is ended by Datastar's
   `requestCancellation` ('auto': a newer request to the same address from the page cancels the
   older). The page's stream uses `cleanup`, including when reopened, so it ends with its
   owner element. A closed roster group sends its summary alone; opening it updates the
@@ -759,7 +760,7 @@ A lane that redraws a page writes its notes here.
 | A run's file | `/projects/id/<p>/runs/<r>/files/<name>` | `views::step::run_file_page` | page head, the file in mono on the inset |
 | Day | `/day`, `/projects/id/<p>/day` (`/stream`) | `views::day` | lead head, `sluice-day`, the timetable with its badges and folds |
 | Stats | `/projects/id/<p>/stats` (`/stream`) | `views::stats` | lead head with the window switch beside it, section heads, tables, the throughput chart |
-| For you, Questions, History | `/inbox`, `/questions`, `/history`, and project `/inbox`, `/questions`, `/threads` under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, question cards (`sluice-answer`), section heads, cards, `sluice-conversation` |
+| For you, Questions, History | `/inbox`, `/questions`, `/history`, and project `/inbox`, `/questions`, `/threads` under `/projects/id/<p>/` (`/stream`; posts `/messages`, `/messages/read`, `/messages/close`, a reply) | `views::inbox`, `views::threads`, `templates/inbox.html`, `history.html`, `conversation.html`, `answer.html` | lead head over the messages' switch, full question rows (`sluice-answer`), section heads, flat rows, `sluice-conversation` |
 | A thread | `/projects/id/<p>/thread?thread=<t>` | `views::inbox`, `templates/thread.html` | page head with Details, a conversation, `sluice-conversation`, the message box, `sluice-answer` |
 | Log | `/log`, `/projects/id/<p>/log` (`/stream`) | `views::log`, `templates/log.html` | lead head, the presets, `sluice-search` filters, the records table, `sluice-copy` |
 | Functions | `/fns` (`?project=`; `/fns/stream`) | `views::home`, `templates/functions.html` | lead head, `sluice-search`, section heads, a card a fn |
@@ -792,11 +793,14 @@ A lane that redraws a page writes its notes here.
   then Steps: its step view across the sheet, and under it a module for each step that needs the
   owner.
 - **The inbox, Questions and a thread**: the messages' switch under the lead. Questions to the
-  owner come first as question cards, answered in place; then those between agents, the ones
-  nobody waits on and the latest 50 unread notes. Notes are short previews linked to their
-  conversations, with Older notes and Read notes links; no hidden conversation bodies ship.
-  Mark read advances that thread's read watermark. A conversation's messages are
-  rows between hairlines, each with its avatar and Details, the message box under a hairline.
+  owner come first, one flat row each, their full words and answer controls kept in place;
+  then those between agents, those nobody waits on and the latest 50 unread notes. Each note
+  is its own hairline row: quiet unread dot, project and sender, short preview linked to that
+  message in its conversation, and age. One “Mark all read” acts on the displayed page's thread
+  watermarks; “Marked read · Undo” restores the previous marks for ten minutes, across devices,
+  unless a newer read replaced them. Older notes and Read notes lead on. Nothing is marked on
+  sight or by opening a thread. A thread is a conversation between hairlines, with its full
+  questions, inline answers, Details and message box; its own read action offers the same Undo.
 - **Home** (`/`): the lead sentence of counts alone ("3 questions for you, 2 failed, 1 quiet; 63
   running in 4 projects."); "Runner stopped" under it in ochre. For you is the Needs-you list, a
   line an open question (its teal mark, its title linking where it is answered, its project, who

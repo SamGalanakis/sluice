@@ -2,7 +2,7 @@
 //! Needs you (a question, the stops, stops sharing a cause as one, a silence), what finished
 //! lately, At work (a group a recipe, no recipe and the long runs after, creation order
 //! by default) and the steps each row opens to; what the owner sets aside comes back
-//! when it changes; the read cursor is this browser's; in Chromium no sideways scroll from a
+//! when it changes; the read cursor is shared across devices; in Chromium no sideways scroll from a
 //! phone to a wide screen, beside the board too.
 use crate::board_fixture;
 use crate::chrome;
@@ -579,49 +579,82 @@ async fn a_stop_set_aside_comes_back_when_it_fails_again() {
     assert_eq!(plan_html::place(&html, "a-4"), "stopped", "{html}");
 }
 
-/// The bug this catches: History forgetting where this browser looked (or
-/// sharing it).
+/// Regression: History's seen state used to be private to a browser. Independent clients
+/// must share the project's mark, without a stale page moving it backward or undoing a newer one.
 #[tokio::test]
-async fn the_read_cursor_is_this_browsers_and_mark_as_seen_moves_it() {
+async fn history_seen_is_shared_across_clients_and_plan_and_undo_restores_the_previous_mark() {
     let f = Fixture::new().await;
     let n = neutral::seed(&f.writer, f._home.path()).await;
     let router = f.router();
     let history = format!("/projects/id/{}/history", n.almanac);
     let (_, _, _, html) = browse(&router, &history, None, "").await;
     assert!(html.contains("history-row") && html.contains("Mark as seen"));
+    assert!(html.contains("aria-label=\"Finished since you looked\""));
     let through = value(&html, "name=\"through\" value=\"").to_owned();
     let (status, _, cookie, _) = browse(
         &router,
         &format!("{history}/seen"),
-        Some(&[("through", &through)]),
+        Some(&[("through", "1")]),
         "",
     )
     .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
+    assert!(cookie.is_empty());
+    let fields = [("through", through.as_str())];
+    let (status, _, _, _) = browse(&router, &format!("{history}/seen"), Some(&fields), "").await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    // Another client, no cookies: same mark. Legacy browser state is ignored too.
+    for cookie in ["".to_owned(), format!("sluice_seen_{}=1", n.almanac)] {
+        let (_, _, _, seen) = browse(&router, &history, None, &cookie).await;
+        assert!(
+            seen.contains("Seen through") && seen.contains("Undo") && seen.contains("history-row")
+        );
+        assert!(!seen.contains("aria-label=\"Finished since you looked\""));
+    }
+    let plan = format!("/projects/id/{}", n.almanac);
+    let (_, _, _, html) = browse(&router, &plan, None, "").await;
+    assert!(!html.contains("aria-label=\"Finished since you looked\""));
+    browse(
+        &router,
+        &format!("{history}/seen"),
+        Some(&[("through", "1")]),
+        "",
+    )
+    .await;
+    let (status, _, _, _) = browse(
+        &router,
+        &format!("{history}/seen"),
+        Some(&[("through", "1"), ("undo", "true")]),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, _, _, _) = browse(
+        &router,
+        &format!("{history}/seen"),
+        Some(&[("through", &through), ("undo", "true")]),
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, _, _, undone) = browse(&router, &history, None, "").await;
     assert!(
-        cookie.starts_with(&format!("sluice_seen_{}={through}; Path=/;", n.almanac)),
-        "{cookie}"
+        undone.contains("Seen through")
+            && undone.contains("aria-label=\"Finished since you looked\"")
     );
-    let (_, _, _, seen) = browse(&router, &history, None, cookie.split(';').next().unwrap()).await;
-    assert!(seen.contains("Seen through") && seen.contains("Undo") && seen.contains("history-row"));
-    assert!(!seen.contains("aria-label=\"Finished since you looked\""));
-    let (_, _, _, earlier) = browse(
+    let (_, _, _, html) = browse(&router, &plan, None, "").await;
+    assert!(html.contains("aria-label=\"Finished since you looked\""));
+    let (_, _, _, other) = browse(
         &router,
-        &history,
+        &format!("/projects/id/{}/history", n.chores),
         None,
-        &format!("sluice_seen_{}=1", n.almanac),
+        "",
     )
     .await;
-    assert!(earlier.contains("aria-label=\"Finished since you looked\""));
-    let (_, _, _, undone) = browse(
-        &router,
-        &history,
-        None,
-        &format!("sluice_seen_{}=0", n.almanac),
-    )
-    .await;
-    assert!(!undone.contains("Seen through"));
-    assert!(undone.contains("history-row"));
+    assert!(
+        !other.contains("Seen through"),
+        "marks belong to one project"
+    );
 }
 
 /// The bugs this catches: a big roster drawing every healthy group open, and folding a group

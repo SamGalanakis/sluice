@@ -1365,6 +1365,16 @@ pub enum CommandRequest {
     MessagePost(MessagePost),
     Messages(Messages),
     MarkRead(MarkRead),
+    ReadNotes {
+        marks: Vec<MarkRead>,
+        undo: bool,
+    },
+    HistorySeen {
+        project: ProjectId,
+        through: u64,
+        #[serde(default)]
+        undo: bool,
+    },
     StepDismiss(StepDismiss),
     NeedsDismiss(NeedsDismiss),
     FnCall(FnCall),
