@@ -115,19 +115,18 @@ pub async fn seed(writer: &Writer, _id: ProjectId) {
         Ok(())
     }).await.unwrap();
     // its board, with a document of its own, so ?view=board and ?view=both have one to show
+    let checked_board = projects::SetBoard {
+        program: Some(BOARD.into()),
+        expected_rev: None,
+        reason: None,
+        author: "orch".into(),
+    }
+    .check()
+    .unwrap();
     writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             let selector = sluice_model::ids::ProjectSelector::Id(project);
-            projects::board_set(
-                tx,
-                &selector,
-                projects::SetBoard {
-                    program: Some(BOARD.into()),
-                    expected_rev: None,
-                    reason: None,
-                    author: "orch".into(),
-                },
-            )?;
+            projects::board_set(tx, &selector, checked_board)?;
             projects::board_doc_write(
                 tx,
                 &selector,

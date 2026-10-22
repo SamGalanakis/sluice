@@ -2055,7 +2055,7 @@ step `not_found`.
 | `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, limits?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `limits?` (§2.5), `author?` | `{project_id, name}` |
 | `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `limits?` (replaces the project defaults; null clears), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
-| `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`, and each Metric, Query or Chart whose SQL compares `status` with `'failed'` and never reads `error` (it counts the owner's cancels as failures: `Count` counts as the dashboard does); it never refuses |
+| `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); validation runs before the store write transaction; the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`, and each Metric, Query or Chart whose SQL compares `status` with `'failed'` and never reads `error` (it counts the owner's cancels as failures: `Count` counts as the dashboard does); it never refuses |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `board_doc_read` | `project` | `{rev, updated_at, author, markdown, numbered}`: the board's document (`rev` 0 and `markdown` "" before the first write), `numbered` its lines with right-aligned numbers and a tab, as `cat -n` |
 | `board_doc_write` | `project`, `markdown`, `expected_rev?`, `reason?`, `author?` | `{rev, changed}`; replaces the whole document (at most 64 KiB, else `invalid`); a stale `expected_rev` is `conflict` with `current_rev`; the same text again changes nothing |
@@ -2550,8 +2550,12 @@ nav, plan and board keep shared edges; the column scrolls on its own; with the s
 the drawer takes the side instead); below that a section after the plan, shown in turn with the
 plan by a Plan · Board switch in the bar whose links the server answers and keeps in the project's cookie
 (until one is picked a phone shows the board, a wider window the plan). Without a board the page is as before. The program is
-checked again and drawn on the server: the question components draw as the inbox draws them,
-and the data components are filled when the page renders and with every live patch:
+checked again and drawn on the server. Board and recipe view programs are at most 64 KiB
+and 400 statements, with at most 48 levels of syntactic nesting. Resolution visits at most
+4,000 values, counting components, scalars, arrays, objects and references, including every
+repeated reference expansion; exceeding this budget refuses the program with a size problem
+and its line. The question components draw as the inbox draws them, and the data components
+are filled when the page renders and with every live patch:
 `Units(state?)` (the units view's rows), `StepStatus(step)`, `Output(step, field)` (the
 freshest value: the step's progress for that field while it is fresher than the outputs, §6.4,
 marked "live" with the running glyph while the step runs and "progress" after, with when it

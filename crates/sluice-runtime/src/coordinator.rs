@@ -697,11 +697,12 @@ impl<H: ExecutionHost> Coordinator<H> {
                     }
                     command => command,
                 };
+                let checked_board = prepare_board(&command)?;
                 let plans = self.inner.plans.clone();
                 let reply = self
                     .writer()
                     .write(RetrySafety::NonIdempotent, move |tx| {
-                        mutate_project(tx, &catalog, &plans, command)
+                        mutate_project(tx, &catalog, &plans, command, checked_board)
                     })
                     .await?;
                 if matches!(reply, CommandReply::Project(_)) {
@@ -1471,9 +1472,10 @@ impl<H: ExecutionHost> Coordinator<H> {
         } else {
             let refresh = matches!(command, CommandRequest::AcquireLease(_));
             let (catalog, plans) = (self.inner.catalog.clone(), self.inner.plans.clone());
+            let checked_board = prepare_board(&command)?;
             let run = id.clone();
             self.callback_transaction(id, key, encoded, refresh, move |tx| {
-                callback_mutation(tx, &run, command, &catalog, &plans)
+                callback_mutation(tx, &run, command, &catalog, &plans, checked_board)
             })
             .await?
         };
@@ -3094,6 +3096,7 @@ fn callback_mutation(
     command: CommandRequest,
     catalog: &Catalog,
     plans: &PlanCache,
+    checked_board: Option<projects::CheckedSetBoard>,
 ) -> sluice_store::Result<CommandReply> {
     Ok(match command.clone() {
         CommandRequest::StepSubmit(s) => {
@@ -3165,7 +3168,7 @@ fn callback_mutation(
             if Some(messages_project(tx.sql(), &selector)?) != id.project {
                 return Err(conflict("tool project differs from run").into());
             }
-            mutate_project(tx, catalog, plans, command)?
+            mutate_project(tx, catalog, plans, command, checked_board)?
         }
         _ => return Err(conflict("unsupported callback").into()),
     })
@@ -3336,12 +3339,29 @@ fn project_mutation(command: &CommandRequest) -> bool {
             | CommandRequest::PlanSetInput(_)
     ) || edits::edit_selector(command).is_some()
 }
+// Prepare in both the command and callback paths, before acquiring the writer.
+fn prepare_board(
+    command: &CommandRequest,
+) -> Result<Option<projects::CheckedSetBoard>, PublicError> {
+    match command {
+        CommandRequest::BoardSet(request) => projects::SetBoard {
+            program: request.program.clone(),
+            expected_rev: request.expected_rev,
+            reason: request.reason.clone(),
+            author: request.author.clone().unwrap_or_else(|| "cli".into()),
+        }
+        .check()
+        .map(Some),
+        _ => Ok(None),
+    }
+}
 /// A project mutation other than a plan edit, in its writer transaction.
 fn mutate_project(
     tx: &mut sluice_store::WriteTransaction<'_>,
     catalog: &Catalog,
     plans: &PlanCache,
     command: CommandRequest,
+    checked_board: Option<projects::CheckedSetBoard>,
 ) -> sluice_store::Result<CommandReply> {
     match command {
         CommandRequest::SettingsUndo { project, key } => {
@@ -3388,12 +3408,7 @@ fn mutate_project(
             let outcome = projects::board_set(
                 tx,
                 &request.project,
-                projects::SetBoard {
-                    program: request.program,
-                    expected_rev: request.expected_rev,
-                    reason: request.reason,
-                    author: request.author.unwrap_or_else(|| "cli".into()),
-                },
+                checked_board.ok_or_else(|| conflict("board program was not checked"))?,
             )?;
             json_reply(json!({"rev": outcome.rev, "warnings": outcome.warnings}))
         }

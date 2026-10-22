@@ -109,6 +109,7 @@ impl SettingsCommands for StoreCommands {
         request: projects::SetBoard,
     ) -> BoxFuture<'_, Result<projects::BoardSetOutcome, PublicError>> {
         Box::pin(async move {
+            let request = request.check()?;
             self.writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
                     projects::board_set(tx, &ProjectSelector::Id(id), request)

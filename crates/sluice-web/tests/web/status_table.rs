@@ -70,18 +70,17 @@ fn run(
 
 /// Set `project`'s board program.
 async fn board(f: &Fixture, project: ProjectId, program: String) {
+    let checked_board = projects::SetBoard {
+        program: Some(program),
+        expected_rev: Some(Revision(0)),
+        reason: None,
+        author: "orch".into(),
+    }
+    .check()
+    .unwrap();
     f.writer
         .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::board_set(
-                tx,
-                &ProjectSelector::Id(project),
-                projects::SetBoard {
-                    program: Some(program),
-                    expected_rev: Some(Revision(0)),
-                    reason: None,
-                    author: "orch".into(),
-                },
-            )?;
+            projects::board_set(tx, &ProjectSelector::Id(project), checked_board)?;
             Ok(())
         })
         .await

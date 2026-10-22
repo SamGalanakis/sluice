@@ -774,6 +774,38 @@ pub struct SetBoard {
     pub reason: Option<String>,
     pub author: String,
 }
+/// A board program checked before entering the store's writer transaction.
+/// Its fields are private so the stored text always matches the checked tree.
+#[derive(Debug, Clone)]
+pub struct CheckedSetBoard {
+    request: SetBoard,
+    board: Option<sluice_model::openui::Board>,
+}
+impl SetBoard {
+    /// Parse and check without holding the writer. Only the returned request can be stored.
+    pub fn check(self) -> std::result::Result<CheckedSetBoard, PublicError> {
+        let request = self;
+        let board = match request
+            .program
+            .as_deref()
+            .map(sluice_model::openui::check_board)
+        {
+            Some(Err(problems)) => {
+                return Err(PublicError::Invalid {
+                    message: format!(
+                        "the board program has {} problem{}",
+                        problems.len(),
+                        if problems.len() == 1 { "" } else { "s" }
+                    ),
+                    errors: problems.iter().map(ToString::to_string).collect(),
+                });
+            }
+            Some(Ok(board)) => Some(board),
+            None => None,
+        };
+        Ok(CheckedSetBoard { request, board })
+    }
+}
 /// What `board_set` did: the board's revision, and each step its program names that the
 /// plan cannot give it (`Board::warnings`), which never refuses the program.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -782,15 +814,16 @@ pub struct BoardSetOutcome {
     pub warnings: Vec<String>,
 }
 /// Set or clear a project's board in one transaction with its `project.board` record (which
-/// leaves the program out). A stale `expected_rev` is a conflict; a program that does not
-/// check against the board vocabulary is invalid, each problem with its line. Setting the
+/// leaves the program out). Call `SetBoard::check` before entering the writer transaction;
+/// a stale `expected_rev` is still checked here and is a conflict. Setting the
 /// board it already has (or clearing none) changes nothing and returns the current rev. The
 /// outcome warns for each step the program names that is not in the plan (`board_warnings`).
 pub fn board_set(
     tx: &mut WriteTransaction<'_>,
     selector: &ProjectSelector,
-    request: SetBoard,
+    checked: CheckedSetBoard,
 ) -> Result<BoardSetOutcome> {
+    let CheckedSetBoard { request, board } = checked;
     let project = resolve(tx.sql(), selector)?;
     if request.expected_rev.is_some_and(|r| r != project.board_rev) {
         return Err(PublicError::Conflict {
@@ -799,29 +832,20 @@ pub fn board_set(
         }
         .into());
     }
-    let board = match request
-        .program
-        .as_deref()
-        .map(sluice_model::openui::check_board)
-    {
-        Some(Err(problems)) => {
-            return Err(PublicError::Invalid {
-                message: format!(
-                    "the board program has {} problem{}",
-                    problems.len(),
-                    if problems.len() == 1 { "" } else { "s" }
-                ),
-                errors: problems.iter().map(ToString::to_string).collect(),
-            }
-            .into());
-        }
-        Some(Ok(board)) => Some(board),
-        None => None,
-    };
     let warnings = match &board {
         Some(board) => board_warnings(tx.sql(), project.project_id, board)?,
         None => vec![],
     };
+    write_board(tx, project, request, warnings)
+}
+
+// Also restores a previously checked board on Undo. No program is parsed in the writer.
+fn write_board(
+    tx: &mut WriteTransaction<'_>,
+    project: Project,
+    request: SetBoard,
+    warnings: Vec<String>,
+) -> Result<BoardSetOutcome> {
     if request.program == project.board {
         return Ok(BoardSetOutcome {
             rev: project.board_rev,
@@ -1435,15 +1459,17 @@ pub fn undo_setting(
         .find(|e| e.key == key)
         .ok_or_else(|| invalid("Undo expired or the setting changed"))?;
     if key == "board" {
-        board_set(
+        let project = resolve(tx.sql(), &ProjectSelector::Id(id))?;
+        write_board(
             tx,
-            &ProjectSelector::Id(id),
+            project,
             SetBoard {
                 program: entry.value.as_str().map(str::to_owned),
                 expected_rev: Some(entry.revision),
                 reason: Some("Undo clear board".into()),
                 author: "owner".into(),
             },
+            vec![],
         )?;
     } else {
         project_update(

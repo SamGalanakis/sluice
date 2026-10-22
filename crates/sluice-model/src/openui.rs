@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const MAX_PROGRAM_BYTES: usize = 64 * 1024;
 /// The most statements of one program.
 pub const MAX_STATEMENTS: usize = 400;
-/// The most components a program draws once its names are resolved.
-pub const MAX_NODES: usize = 4000;
+/// The most value visits while resolving a program, including references.
+pub const MAX_VALUES: usize = 4000;
 const MAX_DEPTH: usize = 48;
 
 /// One parsed value. A `Component` keeps the line its call started on.
@@ -1030,10 +1030,16 @@ fn check_program(src: &str, vocabulary: &Vocabulary) -> (Option<Component>, Vec<
         names: &names,
         used: BTreeSet::new(),
         stack: vec![],
-        nodes: 0,
+        values: 0,
         problems: vec![],
     };
-    let root = resolver.resolve(&first.value, first.line);
+    let root = match resolver.resolve(&first.value, first.line) {
+        Ok(root) => root,
+        Err(problem) => {
+            problems.push(problem);
+            return (None, problems);
+        }
+    };
     let mut used = std::mem::take(&mut resolver.used);
     problems.append(&mut resolver.problems);
     used.insert(first.name.clone());
@@ -1065,61 +1071,69 @@ struct Resolver<'a> {
     names: &'a BTreeMap<&'a str, &'a Statement>,
     used: BTreeSet<String>,
     stack: Vec<String>,
-    nodes: usize,
+    values: usize,
     problems: Vec<Problem>,
 }
 impl Resolver<'_> {
-    fn resolve(&mut self, value: &Value, line: usize) -> Value {
-        match value {
+    fn resolve(&mut self, value: &Value, line: usize) -> Result<Value, Problem> {
+        let line = match value {
+            Value::Component(c) => c.line,
+            _ => line,
+        };
+        self.values += 1;
+        if self.values > MAX_VALUES {
+            return Err(Problem {
+                line,
+                message: format!(
+                    "the program resolves over {MAX_VALUES} values (including references)"
+                ),
+            });
+        }
+        Ok(match value {
             Value::Ref(name) => {
                 let Some(statement) = self.names.get(name.as_str()) else {
                     self.problems.push(Problem {
                         line,
                         message: format!("{name} is used but never defined"),
                     });
-                    return Value::Null;
+                    return Ok(Value::Null);
                 };
                 if self.stack.contains(name) {
                     self.problems.push(Problem {
                         line,
                         message: format!("{name} refers to itself"),
                     });
-                    return Value::Null;
+                    return Ok(Value::Null);
                 }
                 self.used.insert(name.clone());
                 self.stack.push(name.clone());
-                let out = self.resolve(&statement.value, statement.line);
+                let out = self.resolve(&statement.value, statement.line)?;
                 self.stack.pop();
                 out
             }
-            Value::Array(items) => {
-                Value::Array(items.iter().map(|v| self.resolve(v, line)).collect())
-            }
+            Value::Array(items) => Value::Array(
+                items
+                    .iter()
+                    .map(|v| self.resolve(v, line))
+                    .collect::<Result<_, _>>()?,
+            ),
             Value::Object(fields) => Value::Object(
                 fields
                     .iter()
-                    .map(|(k, v)| (k.clone(), self.resolve(v, line)))
-                    .collect(),
+                    .map(|(k, v)| Ok((k.clone(), self.resolve(v, line)?)))
+                    .collect::<Result<_, Problem>>()?,
             ),
-            Value::Component(c) => {
-                self.nodes += 1;
-                if self.nodes == MAX_NODES + 1 {
-                    self.problems.push(Problem {
-                        line: c.line,
-                        message: format!("the program draws over {MAX_NODES} components"),
-                    });
-                }
-                if self.nodes > MAX_NODES {
-                    return Value::Null;
-                }
-                Value::Component(Component {
-                    name: c.name.clone(),
-                    args: c.args.iter().map(|v| self.resolve(v, c.line)).collect(),
-                    line: c.line,
-                })
-            }
+            Value::Component(c) => Value::Component(Component {
+                name: c.name.clone(),
+                args: c
+                    .args
+                    .iter()
+                    .map(|v| self.resolve(v, c.line))
+                    .collect::<Result<_, _>>()?,
+                line: c.line,
+            }),
             other => other.clone(),
-        }
+        })
     }
 }
 
@@ -1671,5 +1685,67 @@ pub fn rule_fails(rule: &str, value: &serde_json::Value) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{check_board, check_view_parts};
+
+    #[test]
+    fn reference_expansion_is_bounded_for_boards_and_views() {
+        // Twelve levels of eight references used to expand 8^12 scalar values,
+        // without consuming the component budget.
+        let mut program = String::from("root = Stack(a0)\n");
+        for level in 0..12 {
+            let next = vec![format!("a{}", level + 1); 8].join(", ");
+            program.push_str(&format!("a{level} = [{next}]\n"));
+        }
+        program.push_str("a12 = \"x\"\n");
+        let start = Instant::now();
+        let problems = check_board(&program).expect_err("expansion must be refused");
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("over 4000 values")),
+            "{problems:?}"
+        );
+        assert!(start.elapsed() < Duration::from_millis(50));
+
+        let start = Instant::now();
+        let (root, problems) = check_view_parts(&program);
+        assert!(root.is_none());
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("over 4000 values")),
+            "{problems:?}"
+        );
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn deeply_nested_programs_are_refused_without_overflowing_the_stack() {
+        let program = format!(
+            "root = Stack({}0{})",
+            "[".repeat(10_000),
+            "]".repeat(10_000)
+        );
+        let problems = check_board(&program).expect_err("nesting must be refused");
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("nested too deeply")),
+            "{problems:?}"
+        );
+        let (_, problems) = check_view_parts(&program);
+        assert!(
+            problems
+                .iter()
+                .any(|p| p.message.contains("nested too deeply")),
+            "{problems:?}"
+        );
     }
 }

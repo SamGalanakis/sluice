@@ -130,6 +130,14 @@ impl Fixture {
         };
         let id = create("lanes", DESCRIPTION).await;
         let plain = create("plain", "").await;
+        let checked_board = projects::SetBoard {
+            program: Some(BOARD.into()),
+            expected_rev: Some(Revision(0)),
+            reason: None,
+            author: "orch".into(),
+        }
+        .check()
+        .unwrap();
         writer
             .write(RetrySafety::NonIdempotent, move |tx| {
                 let doc = json!({"steps":{
@@ -157,12 +165,7 @@ impl Fixture {
                 projects::board_set(
                     tx,
                     &ProjectSelector::Id(id),
-                    projects::SetBoard {
-                        program: Some(BOARD.into()),
-                        expected_rev: Some(Revision(0)),
-                        reason: None,
-                        author: "orch".into(),
-                    },
+                    checked_board,
                 )?;
                 Ok(())
             })

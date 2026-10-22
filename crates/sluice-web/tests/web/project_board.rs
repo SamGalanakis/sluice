@@ -178,21 +178,18 @@ async fn a_button_says_to_the_fallback_session_and_a_stale_board_refuses_it() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
     // The board moves on: a press on the page drawn before is refused, visibly, and nothing is sent.
+    let checked_board = projects::SetBoard {
+        program: Some("root = Button(\"Again\", \"again\")".into()),
+        expected_rev: None,
+        reason: None,
+        author: "orch".into(),
+    }
+    .check()
+    .unwrap();
     f.writer
         .write(RetrySafety::NonIdempotent, {
             let id = f.id;
-            move |tx| {
-                projects::board_set(
-                    tx,
-                    &ProjectSelector::Id(id),
-                    projects::SetBoard {
-                        program: Some("root = Button(\"Again\", \"again\")".into()),
-                        expected_rev: None,
-                        reason: None,
-                        author: "orch".into(),
-                    },
-                )
-            }
+            move |tx| projects::board_set(tx, &ProjectSelector::Id(id), checked_board)
         })
         .await
         .unwrap();
@@ -560,22 +557,21 @@ async fn filtered_units_progress_done_and_paused() {
             }
         };
         set("UPDATE steps SET outputs='{\"red\":9,\"head\":\"old\"}',progress='{\"red\":2}',progress_at='2026-10-06T10:00:00.5Z',progress_run='019a2b3c-4d5e-7f01-8234-56789abcdef0' WHERE project_id=?1").await;
-        f.writer
-        .write(RetrySafety::NonIdempotent, move |tx| {
-            projects::board_set(
-                tx,
-                &ProjectSelector::Id(id),
-                projects::SetBoard {
-                    program: Some("root = Stack([red, head, metric])\nred = Output(\"tests-main\", \"red\")\nhead = Output(\"tests-main\", \"head\")\nmetric = Metric(\"Red\", \"SELECT json_extract(progress, '$.red') FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")".into()),
-                    expected_rev: Some(sluice_model::ids::Revision(0)),
-                    reason: None,
-                    author: "orch".into(),
-                },
-            )?;
-            Ok(())
-        })
-        .await
+        let checked_board = projects::SetBoard {
+            program: Some("root = Stack([red, head, metric])\nred = Output(\"tests-main\", \"red\")\nhead = Output(\"tests-main\", \"head\")\nmetric = Metric(\"Red\", \"SELECT json_extract(progress, '$.red') FROM steps WHERE project_id = ? AND step_id = 'tests-main'\")".into()),
+            expected_rev: Some(sluice_model::ids::Revision(0)),
+            reason: None,
+            author: "orch".into(),
+        }
+        .check()
         .unwrap();
+        f.writer
+            .write(RetrySafety::NonIdempotent, move |tx| {
+                projects::board_set(tx, &ProjectSelector::Id(id), checked_board)?;
+                Ok(())
+            })
+            .await
+            .unwrap();
         let page = format!("/projects/id/{id}");
         let step = format!("/projects/id/{id}/steps/tests-main");
         let output = |html: &str, field: &str| {

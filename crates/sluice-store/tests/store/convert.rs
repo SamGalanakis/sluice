@@ -736,17 +736,20 @@ async fn slow_a_schema_2_home_without_later_columns_converts_and_keeps_its_board
         (p.board.as_deref(), p.board_rev, p.prune_done_after),
         (Some("root = Text(\"kept\")"), Revision(1), None)
     );
+    let checked_board = projects::SetBoard {
+        program: Some("root = Text(\"new\")".into()),
+        expected_rev: Some(Revision(1)),
+        reason: None,
+        author: "orch".into(),
+    }
+    .check()
+    .unwrap();
     let rev = writer
         .write(RetrySafety::NonIdempotent, move |tx| {
             projects::board_set(
                 tx,
                 &sluice_model::ids::ProjectSelector::Id(project),
-                projects::SetBoard {
-                    program: Some("root = Text(\"new\")".into()),
-                    expected_rev: Some(Revision(1)),
-                    reason: None,
-                    author: "orch".into(),
-                },
+                checked_board,
             )
         })
         .await

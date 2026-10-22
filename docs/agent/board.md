@@ -28,7 +28,12 @@ or edited the document and whether the plan has changed since (under the documen
 - A program that does not check is refused (`invalid`) with every problem as `line N: …`: a
   line that is not a statement, an unknown component, a missing, extra or mistyped argument, a
   name used but never defined (or defined twice, or referring to itself), a statement nothing
-  uses. Nothing is stored until it checks.
+  uses. Programs are at most 64 KiB and 400 statements, with at most 48 levels of nesting
+  within a statement. Resolving a program visits at most 4,000 values: components, scalars,
+  arrays, objects and references all count, including each repeated reference expansion.
+  Over-budget programs are refused with a size problem and its line. Recipe views share
+  these limits. The program is checked before the store write transaction; nothing is
+  stored until it checks.
 - `board_set` returns `{rev, warnings}`. Each warning is a step the program names that the
   plan cannot give it: `line N: StepStatus names step `x`, which is not in the plan`, or
   `selects `tag:x`, which no plan step carries` (or several do); or a query that counts the
