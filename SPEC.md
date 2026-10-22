@@ -344,7 +344,13 @@ a Python fn (§5.4), an agent session in the private tmux, or a built-in fn.
 A guardian outlives a coordinator that is busy or restarting, retrying it less and less often
 (up to every 5 s), but not one that is gone for good: once nothing has listened on the
 coordinator's socket for ten minutes, or its home no longer exists, the guardian stops, and its
-unit's stop ends the payload. A coordinator that comes back later finds the run `lost` (§7.9).
+unit's stop ends the payload, even if the guardian itself was killed. Each home's workload
+slice uses `StopWhenUnneeded=yes`: systemd retires it once its last dependent service stops,
+without coordinator or test teardown. This policy is scoped to the home, leaving shared
+parent slices' lifetimes alone. A new run's single `StartTransientUnit` request (through
+`busctl`) uses replace job mode, so it can replace a pending automatic stop of its empty home
+slice. Live services keep the slice alive through systemd dependencies. A coordinator that
+comes back later finds the run `lost` (§7.9).
 A guardian reads its run's resource accounting once a second; an OOM kill ends the payload
 whenever it happens.
 

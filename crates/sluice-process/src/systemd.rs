@@ -192,51 +192,90 @@ impl TransientService {
                 reconciled: true,
             });
         }
-        let mut command = Command::new("/usr/bin/systemd-run");
-        command
-            .args([
-                "--user",
-                "--quiet",
-                "--collect",
-                "--service-type=exec",
-                "--unit",
-            ])
-            .arg(&self.name)
-            .args([
-                "--property=Delegate=yes",
-                "--property=OOMPolicy=continue",
-                "--property=KillMode=control-group",
-                "--property=Restart=no",
-                "--property=TimeoutStopSec=5s",
-            ])
-            .arg(format!("--description=Sluice run {}", self.name));
+        // StartTransientUnit's replace mode lets a new dependent replace a pending
+        // automatic stop of its empty slice. systemd-run uses fail mode, which rejects
+        // that transaction and leaves an admitted run without a service. A run's own
+        // start remains fenced and is sent exactly once.
+        let mut fields: Vec<(&str, &str, Vec<OsString>)> = Vec::new();
+        for (name, signature, value) in [
+            ("Type", "s", "exec"),
+            ("Delegate", "b", "true"),
+            ("OOMPolicy", "s", "continue"),
+            ("KillMode", "s", "control-group"),
+            ("Restart", "s", "no"),
+            ("TimeoutStopUSec", "t", "5000000"),
+            ("CollectMode", "s", "inactive-or-failed"),
+        ] {
+            fields.push((name, signature, vec![value.into()]));
+        }
+        fields.push((
+            "Description",
+            "s",
+            vec![format!("Sluice run {}", self.name).into()],
+        ));
         if let Some(slice) = &spec.workload_slice {
-            command.arg(format!("--slice={}", slice.name));
+            fields.push(("Slice", "s", vec![slice.name.clone().into()]));
         }
         if let Some(budget) = budget {
             let properties = properties(budget);
             tracing::info!(unit = %self.name, ?properties, "starting a run's service with its limits");
-            for property in properties {
-                command.arg(format!("--property={property}"));
+            for (name, value) in [
+                ("MemoryMax", budget.memory_bytes.unwrap_or(u64::MAX)),
+                ("MemorySwapMax", 0),
+                (
+                    "CPUQuotaPerSecUSec",
+                    budget.cpu_millis.map_or(u64::MAX, |n| u64::from(n) * 1000),
+                ),
+                ("TasksMax", budget.tasks.map_or(u64::MAX, u64::from)),
+            ] {
+                fields.push((name, "t", vec![value.to_string().into()]));
             }
         }
         if let Some(cwd) = &spec.cwd {
-            command.arg("--working-directory").arg(cwd);
+            fields.push(("WorkingDirectory", "s", vec![cwd.as_os_str().to_owned()]));
         }
+        let mut environment = vec![spec.env.len().to_string().into()];
         for (key, value) in &spec.env {
-            let mut assignment = OsString::from("--setenv=");
-            assignment.push(key);
+            let mut assignment = key.clone();
             assignment.push("=");
             assignment.push(value);
-            command.arg(assignment);
+            environment.push(assignment);
         }
-        command.arg("--").arg(&spec.program).args(&spec.args);
+        fields.push(("Environment", "as", environment));
+        let mut exec = vec![
+            "1".into(),
+            spec.program.as_os_str().to_owned(),
+            (spec.args.len() + 1).to_string().into(),
+            spec.program.as_os_str().to_owned(),
+        ];
+        exec.extend(spec.args.iter().cloned());
+        exec.push("false".into());
+        fields.push(("ExecStart", "a(sasb)", exec));
+        let mut command = Command::new("/usr/bin/busctl");
+        command.args([
+            "--user",
+            "--",
+            "call",
+            "org.freedesktop.systemd1",
+            "/org/freedesktop/systemd1",
+            "org.freedesktop.systemd1.Manager",
+            "StartTransientUnit",
+            "ssa(sv)a(sa(sv))",
+        ]);
+        command
+            .arg(&self.name)
+            .arg("replace")
+            .arg(fields.len().to_string());
+        for (name, signature, values) in fields {
+            command.arg(name).arg(signature).args(values);
+        }
+        command.arg("0"); // No auxiliary units.
         // Reserve before the helper can send a start to the manager. From here onward,
         // a timeout is ambiguous and may only be reconciled, never replayed.
         self.attempted = true;
         let result = manager_start(command, spec.start_fence.as_ref()).await;
         match result {
-            Ok(_) => match self.query().await {
+            Ok(_) => match self.started().await {
                 Ok(state) if state.load_state != "not-found" => Ok(StartOutcome::Confirmed {
                     state,
                     reconciled: false,
@@ -248,6 +287,21 @@ impl TransientService {
             },
             Err(e) => Ok(self.reconcile(format!("ambiguous start: {e}")).await),
         }
+    }
+    /// StartTransientUnit acknowledges the queued job before Type=exec has executed the
+    /// program. Preserve the synchronous start contract by observing activation finish;
+    /// never issue another start while waiting, including if this observation times out.
+    async fn started(&self) -> io::Result<UnitState> {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let state = self.query().await?;
+                if state.active_state != "activating" {
+                    return Ok(state);
+                }
+            }
+        })
+        .await
+        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "service activation still pending"))?
     }
     async fn reconcile(&self, message: String) -> StartOutcome {
         match self.query().await {
@@ -344,14 +398,14 @@ async fn manager_start(
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "systemd start still pending"))??;
     if !output.status.success() {
         return Err(io::Error::other(format!(
-            "systemd-run: {}",
+            "systemd start: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
     Ok(output)
 }
 
-/// `systemctl --user` and `systemd-run --user` find the manager through XDG_RUNTIME_DIR,
+/// User-manager commands find the manager through XDG_RUNTIME_DIR,
 /// which a scrubbed environment may lack.
 fn find_manager(command: &mut Command) {
     if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
@@ -652,8 +706,12 @@ impl WorkloadSlice {
     /// Apply the slice's caps (the pool's bound) and read them back: a slice that does not
     /// keep them after set-property fails the launch, as a run's own caps do.
     async fn ensure_locked(&self) -> io::Result<()> {
-        if self.mismatches(true).await?.is_empty() {
+        let differ = self.mismatches(true).await?;
+        if differ.is_empty() {
             return Ok(());
+        }
+        if differ.iter().any(|d| d == "StopWhenUnneeded is not yes") {
+            self.configure_lifetime().await?;
         }
         // A changed total applies to a populated slice: existing runs keep their own caps.
         let mut update = Command::new("/usr/bin/systemctl");
@@ -671,15 +729,41 @@ impl WorkloadSlice {
             differ.join(", ")
         )))
     }
-    /// How the slice's MemoryMax, MemorySwapMax, TasksMax, CPUWeight and the kernel's cpu.max
-    /// differ from its totals and weight. An inactive slice has no cpu.max to read: `unread_cpu` counts that as a
-    /// difference, so set-property applies the quota before the slice starts.
+    /// A run's dependency keeps its home slice alive. Once the last service exits, the
+    /// manager retires that slice without coordinator or test teardown. StopWhenUnneeded
+    /// is a unit-file-only property; its drop-in is specific to this home, never a shared
+    /// parent or prefix. Test teardown's revert removes it with the runtime resource caps.
+    async fn configure_lifetime(&self) -> io::Result<()> {
+        let dir = PathBuf::from(format!(
+            "/run/user/{}/systemd/user/{}.d",
+            rustix::process::getuid().as_raw(),
+            self.name
+        ));
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join("50-sluice-lifetime.conf");
+        let contents = "[Unit]\nStopWhenUnneeded=yes\n";
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(contents) {
+            let temporary = dir.join(format!(".{}.tmp", RunId::new()));
+            std::fs::write(&temporary, contents)?;
+            std::fs::rename(temporary, path)?;
+        }
+        // Reload even when the files already match: a previous process may have died
+        // between publishing them and asking the manager to read them.
+        let mut reload = Command::new("/usr/bin/systemctl");
+        reload.args(["--user", "daemon-reload"]);
+        manager_output(reload).await?;
+        Ok(())
+    }
+    /// How the slice's lifetime, MemoryMax, MemorySwapMax, TasksMax, CPUWeight and the
+    /// kernel's cpu.max differ from its policy. An inactive slice has no cpu.max to read:
+    /// `unread_cpu` counts that as a difference, so set-property applies the quota before start.
     async fn mismatches(&self, unread_cpu: bool) -> io::Result<Vec<String>> {
         let mut show = Command::new("/usr/bin/systemctl");
         show.args([
             "--user",
             "show",
             "--property=LoadState",
+            "--property=StopWhenUnneeded",
             "--property=MemoryMax",
             "--property=MemorySwapMax",
             "--property=TasksMax",
@@ -696,6 +780,9 @@ impl WorkloadSlice {
             ));
         }
         let mut out = Vec::new();
+        if field("StopWhenUnneeded=") != Some("yes") {
+            out.push("StopWhenUnneeded is not yes".into());
+        }
         let number = |n: Option<u64>| n.map_or("infinity".to_owned(), |n| n.to_string());
         let memory = number(self.totals.memory_bytes);
         if field("MemoryMax=") != Some(memory.as_str()) {

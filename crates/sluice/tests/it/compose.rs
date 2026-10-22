@@ -871,49 +871,94 @@ fn retired_model_forms_validate_in_the_plan_and_fail_at_launch() {
     assert!(!g.temp.path().join("devin-prompts.jsonl").exists());
 }
 
-/// Bug (2026-10-20): tests that died before their teardown, or tore down from an environment
-/// without XDG_RUNTIME_DIR, left 8 guardians retrying a coordinator that was gone (every 50 ms,
-/// for ten days) and 733 workload slices on the host. A guardian whose coordinator stops
-/// listening stops itself past its bound, and a home's teardown leaves no unit or slice.
+/// A killed test cannot run Gate's teardown. Its guardian must stop the payload after
+/// coordinator loss, and systemd must retire the empty workload slice without that teardown.
 #[test]
-fn a_guardian_outlives_a_vanished_coordinator_only_for_its_bound() {
-    let mut g = Gate::configured(|g| {
-        g.env
-            .insert("SLUICE_TEST_GUARDIAN_ORPHAN_S".into(), "0.5".into());
-    });
-    g.plan(json!({"long": {"run":"fixture.wait","in":{"value":{"default":1}}}}));
-    let lease = g.lease();
-    g.wait(|g| {
-        g.status()["steps"]["long"]["run_ids"][0]
-            .as_str()
-            .is_some_and(|run| {
-                g.home
-                    .join("runs")
-                    .join(run)
-                    .join("dispatch-count")
-                    .exists()
-            })
-    });
-    let unit = format!("sluice-test-{}.service", g.run("long"));
-    let slice = units::home_slice(&g.home).expect("the run's workload slice");
-    assert!(units::unit_active(&unit) && units::unit_active(&slice));
-    // The coordinator dies the way a killed test's does: nothing tears its run down.
-    drop(lease);
-    let mut broker = g.broker.take().unwrap();
-    broker.kill().unwrap();
-    broker.wait().unwrap();
-    let gone = Instant::now();
-    while units::unit_active(&unit) {
-        assert!(
-            gone.elapsed() < Duration::from_secs(2),
-            "{unit} outlived its coordinator"
-        );
-        std::thread::sleep(Duration::from_millis(20));
+fn slow_a_killed_test_leaves_no_run_service_or_workload_slice() {
+    const READY: &str = "SLUICE_TEST_ORPHAN_READY";
+    if let Some(ready) = std::env::var_os(READY) {
+        let g = Gate::configured(|g| {
+            g.env
+                .insert("SLUICE_TEST_GUARDIAN_ORPHAN_S".into(), "0.5".into());
+        });
+        g.plan(json!({"long": {"run":"fixture.wait","in":{"value":{"default":1}}}}));
+        let _lease = g.lease();
+        g.wait(|g| {
+            g.status()["steps"]["long"]["run_ids"][0]
+                .as_str()
+                .is_some_and(|run| {
+                    g.home
+                        .join("runs")
+                        .join(run)
+                        .join("dispatch-count")
+                        .exists()
+                })
+        });
+        let unit = format!("sluice-test-{}.service", g.run("long"));
+        let slice = units::home_slice(&g.home).expect("the run's workload slice");
+        assert!(units::unit_active(&unit) && units::unit_active(&slice));
+        let guardian: u32 = rusqlite::Connection::open(g.home.join("sluice.db"))
+            .unwrap()
+            .query_row(
+                "SELECT guardian_pid FROM runs WHERE run_id=?1",
+                [g.run("long")],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let group = sluice_process::identity::ProcessIdentity::read(guardian)
+            .unwrap()
+            .cgroup;
+        let group = group.strip_suffix("/control").unwrap();
+        let group = Path::new("/sys/fs/cgroup").join(group.trim_start_matches('/'));
+        std::fs::write(
+            ready,
+            serde_json::to_vec(&json!({
+                "home": g.home, "unit": unit, "slice": slice, "group": group
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        // Kill the test and its coordinator before either can run Drop, as a timeout does.
+        Command::new("/usr/bin/kill")
+            .args(["-KILL", "--", &format!("-{}", std::process::id())])
+            .status()
+            .unwrap();
+        unreachable!("SIGKILL must end the worker");
     }
-    // The slice outlives its last run; the home's teardown removes it and its settings.
-    assert!(units::unit_active(&slice));
-    drop(g);
-    assert!(!units::unit_active(&slice), "{slice} left behind");
+    use std::os::unix::process::{CommandExt, ExitStatusExt};
+    let evidence = tempfile::tempdir().unwrap();
+    let ready = evidence.path().join("ready.json");
+    let status = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "compose::slow_a_killed_test_leaves_no_run_service_or_workload_slice",
+            "--nocapture",
+        ])
+        .env(READY, &ready)
+        .process_group(0)
+        .status()
+        .unwrap();
+    assert_eq!(status.signal(), Some(9), "test worker must die by SIGKILL");
+    let data: Value = serde_json::from_slice(&std::fs::read(ready).unwrap()).unwrap();
+    let home = PathBuf::from(data["home"].as_str().unwrap());
+    let cleanup = units::HomeUnits(home.clone());
+    let gone = Instant::now();
+    for key in ["unit", "slice"] {
+        let unit = data[key].as_str().unwrap();
+        while units::unit_active(unit) {
+            assert!(
+                gone.elapsed() < Duration::from_secs(2),
+                "{unit} left behind after the test was killed"
+            );
+            std::thread::yield_now();
+        }
+    }
+    assert!(
+        !Path::new(data["group"].as_str().unwrap()).exists(),
+        "run cgroup survived its guardian"
+    );
+    drop(cleanup);
+    std::fs::remove_dir_all(home.parent().unwrap()).unwrap();
 }
 
 // An agent's task starts with its step's previous attempt (the first says so) and the git
