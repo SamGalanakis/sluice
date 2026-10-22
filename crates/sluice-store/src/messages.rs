@@ -1352,8 +1352,9 @@ pub fn assign_run_range(
     Ok(assigned)
 }
 
-/// RunStarted must already have persisted actual process-start evidence. A stale
-/// callback never advances a replacement step generation.
+/// RunStarted consumes a scatter batch window, whose items have separate sessions.
+/// Ordinary steps consume assigned and live messages only on acknowledgement.
+/// A stale callback never advances a replacement step generation.
 pub fn advance_cursor(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,
@@ -1366,6 +1367,19 @@ pub fn advance_cursor(
     let (started,through):(bool,i64)=tx.sql().query_row("SELECT started_at IS NOT NULL,assigned_through FROM runs WHERE project_id=?1 AND run_id=?2",params![project.to_string(),run.to_string()],|r|Ok((r.get(0)?,r.get(1)?)))?;
     if !started {
         return Err(conflict("run has not started"));
+    }
+    if info.item < 0 {
+        // Starting the payload proves nothing about engine acceptance. Only
+        // acknowledge_delivery may consume an ordinary step's assigned backlog.
+        return tx
+            .sql()
+            .query_row(
+                "SELECT delivery_cursor FROM steps WHERE project_id=?1 AND step_id=?2 AND generation=?3 AND work_generation=?4",
+                params![project.to_string(), step, info.generation, info.work],
+                |r| r.get(0).map(MessageId),
+            )
+            .optional()?
+            .ok_or_else(|| conflict("run belongs to an old step generation"));
     }
     let changed_rows=tx.sql().execute("UPDATE steps SET delivery_cursor=max(delivery_cursor,?1) WHERE project_id=?2 AND step_id=?3 AND generation=?4 AND work_generation=?5",params![through,project.to_string(),step,info.generation,info.work])?;
     if changed_rows == 0 {
@@ -1431,7 +1445,7 @@ fn delivered_through(
     Ok(())
 }
 
-/// Dispatch acknowledgements are independent of RunStarted's batch cursor.
+/// Advance ordinary steps over acknowledged assigned and live messages alike.
 pub fn acknowledge_delivery(
     tx: &mut WriteTransaction<'_>,
     project: ProjectId,

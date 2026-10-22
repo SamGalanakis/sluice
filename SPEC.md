@@ -383,11 +383,11 @@ comes back later finds the run `lost` (§7.9).
 A guardian reads its run's resource accounting once a second; an OOM kill ends the payload
 whenever it happens.
 
-An agent's supervisor acknowledges each live message its engine accepted to the guardian, which
-answers once the acknowledgement is durable in the run's `delivery.json` (a redelivery after a
-restart skips it). The guardian tells the coordinator afterwards, beside its loop and again
-until the coordinator takes it, and the completion carries every acknowledgement, so a slow or
-stalled coordinator never holds the answer.
+An agent's supervisor acknowledges each assigned or live message its engine accepted to the
+guardian, which answers once the acknowledgement is durable in the run's `delivery.json`
+(a redelivery after a restart skips it). The guardian tells the coordinator afterwards, beside
+its loop and again until the coordinator takes it, and the completion carries every
+acknowledgement, so a slow or stalled coordinator never holds the answer.
 
 The guardian hands each engine hook to the agent supervisor through the run's
 `engine-hooks/` journal and waits up to three seconds for its decision. The journal keeps only
@@ -1520,15 +1520,18 @@ a scattered step's item; a run that is not its step's current, executing one is 
 
 ### 7.8 Message delivery and `prev_run`
 
-Each step keeps a delivery cursor: the last message id addressed to it that a run of it was
-given. Reserving a run assigns it every message to the step after the cursor and records the
-range on the run; the live feed continues from the end of that range, and the cursor advances
-once the run has started. It also advances over messages the live feed hands a run once the
-run acknowledges them (its session has them): over each message after the cursor that a run
-of the step has acknowledged, up to the first that none has, which the next run is assigned
-again. So a resumed or retried run is never given a message its step's session already has.
-Every run of a scattered step gets the step's messages: its items' acknowledgements leave the
-cursor alone.
+Each step keeps a delivery cursor: the last contiguous message id addressed to it that a
+run of it acknowledged. Reserving a run assigns it every message to the step after the
+cursor and records the range on the run; the live feed continues from the end of that range.
+Assigned backlog and live messages advance the cursor by the same rule: over each message
+that a run of the step has acknowledged, up to the first that none has. Starting a payload
+never acknowledges its assigned backlog. If its engine fails before accepting a message,
+including feedback from `step_retry(message=...)`, the next run is assigned that message
+again, even when the retry adds no message. An offer without acknowledgement remains
+undelivered; an acknowledged message is never given to a later run again. Every run of a
+scattered step gets the step's messages through its frozen batch window: starting an item
+consumes that window for future batches, and its items' acknowledgements leave the cursor
+alone.
 `runs/<run>/messages.json` shows the assigned range. Each run records `prev_run`, the step's (or
 item's) previous run, seen as `SLUICE_PREV_RUN` and `ctx.prev_run`. Agent fns resume the
 previous session when a bound `session` says so, or when `session` is unbound, the run was

@@ -943,7 +943,10 @@ for line in sys.stdin:
     error=None
     if req['operation']=='command':
         cmd=req['command']
-        if cmd['command'] in ('start_fresh','resume'): state['status']='idle'
+        if cmd['command'] in ('start_fresh','resume'):
+            state['status']='idle'
+            if config.get('fatal') == 'before_task':
+                state['error']={'kind':'fatal','message':'fixture terminal error before task'}
         if cmd['command'] in ('deliver_text','steer'):
             if cmd['id']['kind']=='message': messages+=1
             state['acknowledged'].append(cmd['id']);state['turns_started']+=1;state['status']='busy';state['progress']+=1
@@ -1642,6 +1645,64 @@ run(main)
         assert_eq!(result["error"]["message"], "fixture terminal error");
         assert_eq!(result["error"]["session"], "fake-session");
     }
+}
+
+// Feedback assigned before an engine failure must survive a retry without new feedback.
+#[test]
+fn retry_preserves_feedback_until_the_engine_acknowledges_it() {
+    let g = Gate::new();
+    g.script(json!({"outputs":{"summary":"first"}}));
+    let mut spec = agent(&g);
+    spec["limits"] = json!({"memory":"512MiB","cpus":2,"tasks":128});
+    g.plan(json!({"work":spec}));
+    let _lease = g.lease();
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let first = g.run("work");
+    let retry = |message: Option<&str>| {
+        g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":message,"reason":"retry","author":"@test"}}));
+    };
+    g.script(json!({"fatal":"before_task"}));
+    retry(Some("Fix X"));
+    g.wait(|g| g.run("work") != first);
+    let failed = g.terminal("work");
+    assert_eq!(failed["status"], "failed", "{failed}");
+    let second = g.run("work");
+    assert!(
+        g.events()
+            .iter()
+            .all(|e| e["run"] != second || e["command"]["command"] != "deliver_text"),
+        "the second engine never took its task"
+    );
+
+    g.script(json!({"outputs":{"summary":"fixed"},"wait_message":true}));
+    retry(None);
+    g.wait(|g| g.run("work") != second && g.events().iter().any(|e| e["run"] == g.run("work")));
+    let third = g.run("work");
+    let assigned =
+        std::fs::read_to_string(g.home.join("runs").join(&third).join("messages.json")).unwrap();
+    assert!(
+        assigned.contains("Fix X"),
+        "retry lost unacknowledged feedback: {assigned}"
+    );
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let deliveries: Vec<_> = g
+        .events()
+        .into_iter()
+        .filter(|e| e["command"]["id"]["kind"] == "message")
+        .collect();
+    assert_eq!(deliveries.len(), 1, "{deliveries:?}");
+    assert_eq!(deliveries[0]["run"], third);
+    assert!(
+        deliveries[0]["command"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Fix X")
+    );
+    assert!(
+        g.events()
+            .iter()
+            .any(|e| e["run"] == third && e["command"]["command"] == "resume")
+    );
 }
 
 #[test]
