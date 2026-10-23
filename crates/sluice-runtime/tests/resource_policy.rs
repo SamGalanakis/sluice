@@ -18,10 +18,13 @@ fn execution_policy_fails_closed_and_reserves_guardian_capacity() {
         json!({"execution":null}),
         json!({"execution":{"typo":1}}),
         json!({"execution":{"defaults":{"memory":"40GiB"}}}),
-        json!({"execution":{"total":{"cpus":5}}}),
         json!({"execution":{"ceilings":{"tasks":8192},"total":{"tasks":4096}}}),
         // An unlimited per-run value needs an unlimited ceiling.
         json!({"execution":{"ceilings":{"tasks":64},"defaults":{"tasks":null}}}),
+        json!({"execution":{"total":{"cpus":0}}}),
+        json!({"execution":{"total":{"cpus":-1}}}),
+        json!({"execution":{"total":{"memory":0}}}),
+        json!({"execution":{"total":{"memory":-1}}}),
         json!({"execution":{"cpu_pressure_max":0}}),
         json!({"execution":{"load_per_cpu_max":-1}}),
         json!({"execution":{"warmup_starts":0}}),
@@ -43,7 +46,9 @@ fn execution_policy_fails_closed_and_reserves_guardian_capacity() {
     // Every level may be unlimited, spelled null or "unlimited"; a finite ceiling clamps an
     // inherited unlimited default. Unlimited memory needs the explicit opt-in.
     let open = resource_policy_from_value(&json!({"execution":{"allow_unlimited_memory":true,"total":{"memory":null,"cpus":"unlimited","tasks":null},"ceilings":{"memory":null},"defaults":{"memory":"unlimited"}}}), 8 << 30, 4000).unwrap();
-    assert_eq!(open.total, sluice_model::Limits::UNLIMITED);
+    assert_eq!(open.total.memory_bytes, Some(8 << 30));
+    assert_eq!(open.total.cpu_millis, Some(4000));
+    assert_eq!(open.total.tasks, None);
     assert_eq!(open.ceilings, sluice_model::Limits::UNLIMITED);
     assert_eq!(open.defaults, sluice_model::Limits::UNLIMITED);
     let clamped = resource_policy_from_value(
@@ -94,11 +99,9 @@ fn unlimited_memory_needs_the_opt_in() {
 }
 
 /// Bug (2026-10-20): `user.slice` had memory.max 96 GiB, the live total was 104 GiB, and
-/// every step sat queued behind "execution total exceeds the host's effective memory or CPU
-/// capacity". The effective capacity is the nearest cgroup limit; a total above it fails at
-/// load naming that cgroup and its limit.
+/// host capacity can shrink temporarily; configured totals are ceilings, not load errors.
 #[test]
-fn a_total_above_the_effective_capacity_fails_at_load_naming_the_cgroup() {
+fn totals_follow_effective_capacity_without_rejecting_the_config() {
     use sluice_runtime::config::{HostCapacity, execution_from_value};
     let tree = tempfile::tempdir().unwrap();
     let service = tree
@@ -133,26 +136,29 @@ fn a_total_above_the_effective_capacity_fails_at_load_naming_the_cgroup() {
         (host.cpu_millis, host.cpu_cgroup.as_deref()),
         (8000, Some("/user.slice/user-1000.slice"))
     );
-    let error = execution_from_value(&json!({"execution":{"total":{"memory":"104GiB"}}}), &host)
-        .unwrap_err();
-    assert!(
-        error.contains("execution.total.memory (104 GiB)")
-            && error.contains("cgroup /user.slice has memory.max 96 GiB"),
-        "{error}"
-    );
-    let error =
-        execution_from_value(&json!({"execution":{"total":{"cpus":12}}}), &host).unwrap_err();
-    assert!(
-        error.contains("cgroup /user.slice/user-1000.slice has cpu.max of 8 CPUs"),
-        "{error}"
-    );
-    assert!(
-        execution_from_value(&json!({"execution":{"total":{"memory":"96GiB"}}}), &host).is_ok()
-    );
+    let (cpu, _) = execution_from_value(
+        &json!({"execution":{"total":{"cpus":29}}}),
+        &HostCapacity::plain(128 << 30, 28000),
+    )
+    .unwrap();
+    assert_eq!(cpu.total.cpu_millis, Some(28000));
+    let config = json!({"execution":{"total":{"memory":"104GiB","cpus":29}}});
+    let (policy, _) = execution_from_value(&config, &host).unwrap();
+    assert_eq!(policy.total.memory_bytes, Some(96 << 30));
+    assert_eq!(policy.total.cpu_millis, Some(8000));
+    let (policy, _) =
+        execution_from_value(&config, &HostCapacity::plain(128 << 30, 32000)).unwrap();
+    assert_eq!(policy.total.memory_bytes, Some(104 << 30));
+    assert_eq!(policy.total.cpu_millis, Some(29000));
+    // Explicit run caps remain valid even below a host-derived total. They reserve nothing.
+    let config = json!({"execution":{"defaults":{"memory":"3GiB"},"ceilings":{"memory":"6GiB"}}});
+    let (policy, _) = execution_from_value(&config, &HostCapacity::plain(1 << 30, 28000)).unwrap();
+    assert_eq!(policy.defaults.memory_bytes, Some(3 << 30));
+    assert!(policy.total.memory_bytes.unwrap() < 1 << 30);
     // The new admission settings are checked too.
     for invalid in [
         json!({"execution":{"admission_warmup_s":-1}}),
-        json!({"execution":{"admission_charge":"2TiB"}}),
+        json!({"execution":{"total":{"memory":"96GiB"},"admission_charge":"2TiB"}}),
     ] {
         assert!(
             execution_from_value(&invalid, &host).is_err(),

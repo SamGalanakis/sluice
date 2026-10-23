@@ -92,7 +92,7 @@ impl ExecutionHost for Fake {
         &self,
         _: HomeId,
     ) -> Option<std::io::Result<sluice_runtime::headroom::HostReading>> {
-        self.4.lock().unwrap().map(Ok)
+        self.4.lock().unwrap().clone().map(Ok)
     }
     async fn run_memory(
         &self,
@@ -3041,6 +3041,7 @@ async fn admission_holds_a_burst_on_cpu_pressure_load_and_recent_starts() {
             cpu_pressure_some_avg10: Some(pressure),
             load_avg1: Some(load),
             cpus: Some(32),
+            capacity: None,
         });
     };
     host(74.0, 590.0);
@@ -3133,21 +3134,89 @@ async fn admission_holds_a_burst_on_cpu_pressure_load_and_recent_starts() {
     assert_eq!(fake.launched(40).await.len(), 40);
 }
 
-/// Bug (2026-10-20): a total above the host's effective memory left the coordinator serving
-/// and every step queued behind a generic hold. It now refuses to start, naming the setting.
+/// A temporary cpuset or memory limit used to turn every plan edit into a config error.
+/// Capacity is changed through the execution host's sample, with the coordinator kept open.
+#[tokio::test]
+async fn shrinking_host_clamps_totals_without_blocking_plan_edits_and_recovers() {
+    use sluice_runtime::{config::HostCapacity, headroom::HostReading};
+    let (home, b, fake, p) = setup().await;
+    let selector = json!({"kind":"id","value":p});
+    let sample = |memory, cpus| {
+        let mut capacity = HostCapacity::plain(memory, cpus);
+        capacity.memory_cgroup = Some("/user.slice".into());
+        let host = HostReading {
+            available_bytes: memory,
+            capacity: Some(capacity),
+            cpus: Some(cpus / 1000),
+            ..Default::default()
+        };
+        *fake.4.lock().unwrap() = Some(host);
+    };
+    sample(96 << 30, 28000);
+    std::fs::write(
+        home.path().join("config.json"),
+        json!({"execution":{
+            "total":{"memory":"104GiB","cpus":29},
+            "defaults":{"memory":"64MiB"}, "guardian_memory":"64MiB"
+        }})
+        .to_string(),
+    )
+    .unwrap();
+    b.acquire_scheduler("clamp".into()).await.unwrap();
+    reconcile_project(&b, p, "clamp").await.unwrap();
+    for dry_run in [true, false] {
+        b.command(request(json!({"command":"plan_edit","args":{
+            "project":selector,"rev":2,"ops":[{"op":"step.add","step":"extra",
+            "spec":{"run":"fixture.submit","in":{"value":{"default":1}},"outputs":{"submitted":"boolean"}}}],
+            "start":false,"dry_run":dry_run,"reason":"capacity regression","author":"test"
+        }}))).await.unwrap();
+    }
+    let status_request = json!({"command":"status","args":{"project":selector,
+        "selection":{"steps":null,"tags":null},"all":true}});
+    let status = data_of(&b, status_request.clone()).await;
+    let total = &status["execution"]["total"];
+    assert_eq!(total["cpu_millis"], 28000);
+    assert_eq!(total["memory_bytes"], 96u64 << 30);
+    assert_eq!(total["clamped"], true);
+    assert_eq!(total["clamps"]["cpus"]["configured"], 29.0);
+    assert_eq!(total["clamps"]["cpus"]["effective"], 28.0);
+    assert!(
+        total["clamps"]["cpus"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("affinity")
+    );
+    assert_eq!(total["clamps"]["memory"]["configured_bytes"], 104u64 << 30);
+    assert!(
+        total["clamps"]["memory"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("cgroup /user.slice")
+    );
+    let launches = fake.launched(1).await;
+    assert_eq!(launches[0].policy.total.cpu_millis, Some(28000));
+    assert_eq!(launches[0].policy.total.memory_bytes, Some(96 << 30));
+    sample(128 << 30, 32000);
+    reconcile_project(&b, p, "clamp").await.unwrap();
+    let status = data_of(&b, status_request).await;
+    assert_eq!(status["execution"]["total"]["cpu_millis"], 29000);
+    assert_eq!(status["execution"]["total"]["memory_bytes"], 104u64 << 30);
+    assert_eq!(status["execution"]["total"]["clamped"], false);
+}
+
+/// Malformed execution configuration still prevents startup, even though oversized totals clamp.
 #[tokio::test]
 async fn the_coordinator_does_not_start_on_an_invalid_execution_config() {
     let home = home::ScratchHome::new().unwrap();
     std::fs::write(
         home.path().join("config.json"),
-        json!({"execution":{"total":{"memory":"1024TiB"}}}).to_string(),
+        json!({"execution":{"total":{"memory":0}}}).to_string(),
     )
     .unwrap();
     match Coordinator::open(home.path().into(), Catalog::fixtures(), Fake::default()).await {
-        Err(PublicError::Invalid { message, .. }) => assert!(
-            message.starts_with("config.json: execution.total.memory (1024 TiB) exceeds"),
-            "{message}"
-        ),
+        Err(PublicError::Invalid { message, .. }) => {
+            assert!(message.contains("memory must be positive"), "{message}")
+        }
         Err(other) => panic!("{other:?}"),
         Ok(_) => panic!("opened"),
     }

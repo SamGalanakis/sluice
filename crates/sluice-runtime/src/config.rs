@@ -245,17 +245,77 @@ impl Headroom {
 /// Load execution policy separately from display preferences: malformed policy or an
 /// unreadable configuration must stop admission, never disable resource enforcement.
 pub fn load_resource_policy(home: &Path) -> Result<sluice_model::ResourcePolicy, String> {
-    load_execution(home).map(|(policy, _)| policy)
+    configured_from_value(&execution_value(home)?, &capacity_for_home(home)?)
+        .map(|(policy, _)| policy)
 }
-/// The execution policy and the measured-headroom settings, from one read of config.json.
-pub fn load_execution(home: &Path) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
-    let value = match std::fs::read(home.join("config.json")) {
+
+fn capacity_for_home(home: &Path) -> Result<HostCapacity, String> {
+    if sluice_process::host::test_mode()
+        && let Some(capacity) = crate::headroom::published(home).and_then(|r| r.host.capacity)
+    {
+        return Ok(capacity);
+    }
+    HostCapacity::read()
+}
+
+fn execution_value(home: &Path) -> Result<Value, String> {
+    match std::fs::read(home.join("config.json")) {
         Ok(bytes) => serde_json::from_slice::<Value>(&bytes)
-            .map_err(|error| format!("cannot parse config.json: {error}"))?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
-        Err(error) => return Err(format!("cannot read config.json: {error}")),
+            .map_err(|error| format!("cannot parse config.json: {error}")),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(serde_json::json!({})),
+        Err(error) => Err(format!("cannot read config.json: {error}")),
+    }
+}
+
+/// The effective policy and measured-headroom settings, refreshed on every read.
+pub fn load_execution(home: &Path) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
+    execution_from_value(&execution_value(home)?, &capacity_for_home(home)?)
+}
+
+/// Status keeps the configured ceilings beside the effective total and its limiting sources.
+pub fn load_execution_with_total(
+    home: &Path,
+) -> Result<(sluice_model::ResourcePolicy, Headroom, Value), String> {
+    let host = capacity_for_home(home)?;
+    let (configured, headroom) = configured_from_value(&execution_value(home)?, &host)?;
+    let policy = host.clamp(configured.clone());
+    let shown = |total: sluice_model::Limits| {
+        serde_json::json!({
+            "memory_bytes": sluice_model::limits::shown(total.memory_bytes),
+            "cpu_millis": sluice_model::limits::shown(total.cpu_millis),
+            "tasks": sluice_model::limits::shown(total.tasks),
+        })
     };
-    execution_from_value(&value, &HostCapacity::read()?)
+    let mut total = shown(policy.total);
+    total["configured"] = shown(configured.total);
+    let mut clamps = serde_json::Map::new();
+    if configured.total.memory_bytes != policy.total.memory_bytes {
+        clamps.insert(
+            "memory".into(),
+            serde_json::json!({
+                "configured_bytes": sluice_model::limits::shown(configured.total.memory_bytes),
+                "effective_bytes": policy.total.memory_bytes,
+                "reason": host.memory_cgroup.as_ref().map_or_else(
+                    || "host MemTotal".to_owned(),
+                    |group| format!("cgroup {group} memory.max")),
+            }),
+        );
+    }
+    if configured.total.cpu_millis != policy.total.cpu_millis {
+        clamps.insert(
+            "cpus".into(),
+            serde_json::json!({
+                "configured": sluice_model::limits::shown(configured.total.cpu_millis.map(|n| f64::from(n) / 1000.0)),
+                "effective": policy.total.cpu_millis.map(|n| f64::from(n) / 1000.0),
+                "reason": host.cpu_cgroup.as_ref().map_or_else(
+                    || "CPU affinity or available CPUs".to_owned(),
+                    |group| format!("cgroup {group} cpu.max")),
+            }),
+        );
+    }
+    total["clamped"] = Value::Bool(!clamps.is_empty());
+    total["clamps"] = Value::Object(clamps);
+    Ok((policy, headroom, total))
 }
 
 pub fn resource_policy_from_value(
@@ -268,6 +328,15 @@ pub fn resource_policy_from_value(
 }
 
 pub fn execution_from_value(
+    value: &Value,
+    host: &HostCapacity,
+) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
+    let (policy, headroom) = configured_from_value(value, host)?;
+    Ok((host.clamp(policy), headroom))
+}
+
+/// Check configured limits against each other before applying transient host capacity.
+fn configured_from_value(
     value: &Value,
     host: &HostCapacity,
 ) -> Result<(sluice_model::ResourcePolicy, Headroom), String> {
@@ -391,37 +460,6 @@ pub fn execution_from_value(
     }
     let mut policy = ResourcePolicy::for_host(memory_bytes, cpu_millis)?;
     policy.total = config.total.apply(policy.total)?;
-    use sluice_model::limits::size;
-    if let Some(total) = policy.total.memory_bytes.filter(|n| *n > memory_bytes) {
-        return Err(match &host.memory_cgroup {
-            Some(group) => format!(
-                "execution.total.memory ({}) exceeds the host's effective memory: cgroup {group} has memory.max {}; set execution.total.memory to at most {} or raise that cgroup's limit",
-                size(total),
-                size(memory_bytes),
-                size(memory_bytes)
-            ),
-            None => format!(
-                "execution.total.memory ({}) exceeds the host's memory ({} MemTotal)",
-                size(total),
-                size(memory_bytes)
-            ),
-        });
-    }
-    if let Some(total) = policy.total.cpu_millis.filter(|n| *n > cpu_millis) {
-        let cpus = |n: u32| f64::from(n) / 1000.0;
-        return Err(match &host.cpu_cgroup {
-            Some(group) => format!(
-                "execution.total.cpus ({}) exceeds the host's effective CPUs: cgroup {group} has cpu.max of {} CPUs; lower execution.total.cpus or raise that cgroup's limit",
-                cpus(total),
-                cpus(cpu_millis)
-            ),
-            None => format!(
-                "execution.total.cpus ({}) exceeds the host's {} CPUs",
-                cpus(total),
-                cpus(cpu_millis)
-            ),
-        });
-    }
     if let Some(memory) = config.guardian_memory {
         policy.guardian_memory_bytes = memory.0;
     }
@@ -432,9 +470,21 @@ pub fn execution_from_value(
         (n, _) => n,
     };
     let narrow = |n: Option<u64>| n.map(|n| u32::try_from(n).unwrap_or(u32::MAX));
+    // An explicit default must not become invalid because an inherited ceiling shrank
+    // with the host. The shipped per-run ceiling still catches oversized default typos.
+    if config.defaults.memory.is_some() && config.ceilings.memory.is_none() {
+        policy.ceilings.memory_bytes = Some(sluice_model::limits::DEFAULT_RUN_MEMORY_MAX);
+    }
     policy.ceilings.memory_bytes = clamp(
         policy.ceilings.memory_bytes,
-        room(policy.total.memory_bytes, policy.guardian_memory_bytes),
+        room(
+            if config.total.memory.is_some() {
+                policy.total.memory_bytes
+            } else {
+                None
+            },
+            policy.guardian_memory_bytes,
+        ),
     );
     policy.ceilings.cpu_millis = narrow(clamp(
         policy.ceilings.cpu_millis.map(u64::from),
@@ -474,32 +524,65 @@ pub fn execution_from_value(
     {
         headroom.charge_bytes = headroom.charge_bytes.min(total);
     }
-    if policy
-        .total
-        .memory_bytes
-        .is_some_and(|total| headroom.charge_bytes > total)
+    if config.total.memory.is_some()
+        && policy
+            .total
+            .memory_bytes
+            .is_some_and(|total| headroom.charge_bytes > total)
     {
         return Err(
             "execution.admission_charge exceeds the home memory total, so no run could start"
                 .into(),
         );
     }
-    Ok((policy.validate()?, headroom))
+    // Only explicit totals can contradict another configured limit. Host-derived totals
+    // can shrink below frozen or explicit run caps; the aggregate slice remains the bound.
+    let mut checked = policy.clone();
+    if config.total.memory.is_none() {
+        checked.total.memory_bytes = None;
+    }
+    if config.total.cpus.is_none() {
+        checked.total.cpu_millis = None;
+    }
+    checked.validate()?;
+    Ok((policy, headroom))
 }
 
 /// What the host gives this process: MemTotal and the CPU count, lowered by the nearest
 /// `memory.max` and `cpu.max` among its cgroup and their ancestors. Each names the cgroup whose
-/// limit set it, so a total above it can say where the limit comes from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// limit set it, so status can explain a clamped total.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HostCapacity {
     pub memory_bytes: u64,
     /// The cgroup (as `/user.slice`) whose memory.max is `memory_bytes`; `None` for MemTotal.
+    #[serde(default)]
     pub memory_cgroup: Option<String>,
     pub cpu_millis: u32,
     /// The cgroup whose cpu.max is `cpu_millis`; `None` for the CPU count.
+    #[serde(default)]
     pub cpu_cgroup: Option<String>,
 }
 impl HostCapacity {
+    /// Preserve configured per-run caps even when a host shrinks below them. The slice
+    /// enforces the effective aggregate; a temporary shortage never invalidates plan edits.
+    fn clamp(&self, mut policy: sluice_model::ResourcePolicy) -> sluice_model::ResourcePolicy {
+        policy.total.memory_bytes = Some(
+            policy
+                .total
+                .memory_bytes
+                .unwrap_or(u64::MAX)
+                .min(self.memory_bytes),
+        );
+        policy.total.cpu_millis = Some(
+            policy
+                .total
+                .cpu_millis
+                .unwrap_or(u32::MAX)
+                .min(self.cpu_millis),
+        );
+        policy
+    }
+
     /// A host with no cgroup limits.
     pub fn plain(memory_bytes: u64, cpu_millis: u32) -> Self {
         Self {
@@ -511,6 +594,21 @@ impl HostCapacity {
     }
     /// This process's capacity, from /proc and /sys/fs/cgroup.
     pub fn read() -> Result<Self, String> {
+        // The existing OS host-reading seam can also describe effective capacity.
+        if sluice_process::host::test_mode()
+            && let Ok(reading) = std::env::var("SLUICE_TEST_HOST_READING")
+        {
+            let reading: Value = serde_json::from_str(&reading)
+                .map_err(|error| format!("invalid test host reading: {error}"))?;
+            if let Some(capacity) = reading.get("capacity") {
+                let capacity: Self = serde_json::from_value(capacity.clone())
+                    .map_err(|error| format!("invalid test host capacity: {error}"))?;
+                if capacity.memory_bytes == 0 || capacity.cpu_millis == 0 {
+                    return Err("host capacity must be positive".into());
+                }
+                return Ok(capacity);
+            }
+        }
         let meminfo = std::fs::read_to_string("/proc/meminfo")
             .map_err(|error| format!("cannot inspect host memory: {error}"))?;
         let cpus = u32::try_from(
@@ -593,7 +691,9 @@ impl HostCapacity {
                                 .and_then(|n| n.checked_div(period))
                                 .ok_or("invalid CPU quota ratio")?;
                             let milli = u32::try_from(milli).unwrap_or(u32::MAX);
-                            if milli < capacity.cpu_millis {
+                            if milli < capacity.cpu_millis
+                                || (milli == capacity.cpu_millis && capacity.cpu_cgroup.is_none())
+                            {
                                 capacity.cpu_millis = milli;
                                 capacity.cpu_cgroup = Some(name());
                             }

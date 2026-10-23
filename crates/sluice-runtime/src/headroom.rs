@@ -21,10 +21,13 @@ use std::{
 };
 
 /// One reading of the host, as the execution host takes it.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostReading {
     /// `/proc/meminfo` MemAvailable.
     pub available_bytes: u64,
+    /// Effective memory and CPU capacity, from the same host sample.
+    #[serde(default)]
+    pub capacity: Option<crate::config::HostCapacity>,
     /// `/proc/pressure/memory` `some avg10`, a percentage; `None` on a kernel without PSI.
     #[serde(default)]
     pub memory_pressure_some_avg10: Option<f64>,
@@ -403,6 +406,7 @@ pub fn read_host() -> std::io::Result<HostReading> {
         .count();
     Ok(HostReading {
         available_bytes,
+        capacity: Some(crate::config::HostCapacity::read().map_err(std::io::Error::other)?),
         memory_pressure_some_avg10: read_pressure("/proc/pressure/memory")?,
         cpu_pressure_some_avg10: read_pressure("/proc/pressure/cpu")?,
         load_avg1: Some(load_avg1),
@@ -454,16 +458,10 @@ pub struct Gate {
     headroom: Headroom,
 }
 impl Gate {
-    /// `None` when the host has nothing to measure; a reading is published for status.
-    pub fn new(
-        reading: Option<std::io::Result<Reading>>,
-        home: &Path,
-        headroom: Headroom,
-    ) -> Option<Self> {
+    /// `None` when the host has nothing to measure. Admission publishes the sample before
+    /// loading policy, so test host capacity and the pressure gate share that same reading.
+    pub fn new(reading: Option<std::io::Result<Reading>>, headroom: Headroom) -> Option<Self> {
         let reading = reading?.map_err(|error| error.to_string());
-        if let Ok(reading) = &reading {
-            publish(home, reading);
-        }
         Some(Self { reading, headroom })
     }
     /// Retain each admission sample even when no new run can start.
@@ -560,7 +558,7 @@ pub fn shown_cpu(
         .as_ref()
         .map(|reading| pool(sql, reading, headroom))
         .transpose()?;
-    let host = reading.as_ref().map(|r| r.host);
+    let host = reading.as_ref().map(|r| &r.host);
     Ok(serde_json::json!({
         "pressure_some_avg10": host.and_then(|h| h.cpu_pressure_some_avg10),
         "load_avg1": host.and_then(|h| h.load_avg1),

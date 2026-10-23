@@ -167,18 +167,15 @@ pub(crate) fn status(
         .map(std::path::Path::to_path_buf)
         .unwrap_or_default();
     let names = crate::naming::for_project(sql, &home, id)?;
-    let execution_settings = crate::budget::execution(&home);
+    let execution_settings =
+        crate::config::load_execution_with_total(&home).map_err(crate::budget::invalid);
     let execution_policy = execution_settings
         .as_ref()
-        .map(|(policy, _)| policy.clone())
+        .map(|(policy, _, _)| policy.clone())
         .map_err(Clone::clone);
     let execution = match &execution_settings {
-        Ok((policy, headroom)) => json!({
-            "total": {
-                "memory_bytes": sluice_model::limits::shown(policy.total.memory_bytes),
-                "cpu_millis": sluice_model::limits::shown(policy.total.cpu_millis),
-                "tasks": sluice_model::limits::shown(policy.total.tasks),
-            },
+        Ok((policy, headroom, total)) => json!({
+            "total": total,
             "memory": crate::headroom::shown(sql, &home, policy, headroom)?,
             "cpu": crate::headroom::shown_cpu(sql, &home, headroom)?,
         }),

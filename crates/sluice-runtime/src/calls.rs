@@ -210,7 +210,6 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         ),
         PublicError,
     > {
-        let (policy, headroom) = crate::budget::execution(self.writer.home())?;
         let guardian = &self.guardian;
         let reading = crate::headroom::Reading::take(
             &self.reads,
@@ -219,7 +218,11 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
             |run, service| async move { guardian.run_memory(run, &service).await },
         )
         .await;
-        let gate = crate::headroom::Gate::new(reading, self.writer.home(), headroom);
+        if let Some(Ok(sample)) = &reading {
+            crate::headroom::publish(self.writer.home(), sample);
+        }
+        let (policy, headroom) = crate::budget::execution(self.writer.home())?;
+        let gate = crate::headroom::Gate::new(reading, headroom);
         if let Some(gate) = &gate {
             gate.record_peaks(&self.writer).await?;
         }

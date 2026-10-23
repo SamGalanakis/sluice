@@ -110,7 +110,6 @@ async fn reconcile_pass<H: ExecutionHost>(
     #[cfg(test)] after_reconcile: &mut impl AsyncFnMut(plans::PlanContext),
 ) -> Result<(), PublicError> {
     loop {
-        let (policy, headroom) = crate::budget::execution(broker.home())?;
         let host = broker.host();
         let reading = crate::headroom::Reading::take(
             broker.reads(),
@@ -119,7 +118,11 @@ async fn reconcile_pass<H: ExecutionHost>(
             |run, service| async move { host.run_memory(run, &service).await },
         )
         .await;
-        let gate = crate::headroom::Gate::new(reading, broker.home(), headroom);
+        if let Some(Ok(sample)) = &reading {
+            crate::headroom::publish(broker.home(), sample);
+        }
+        let (policy, headroom) = crate::budget::execution(broker.home())?;
+        let gate = crate::headroom::Gate::new(reading, headroom);
         if let Some(gate) = &gate {
             gate.record_peaks(broker.writer()).await?;
         }
@@ -805,7 +808,21 @@ pub async fn run<H: ExecutionHost>(
                 }
             },
             // A run held for the host's memory or CPU waits on no write; check it again.
-            _=host_recheck.tick()=>{ dirty.extend(broker.host_holds()); },
+            _=host_recheck.tick()=>{
+                // Host restrictions can change without a config edit or a new launch.
+                // Refresh the existing workload slice as well as admission's held projects.
+                match crate::budget::execution(broker.home()) {
+                    Ok((policy, headroom)) => {
+                        if let Err(error) = broker.host().prepare_workloads(
+                            broker.home_id(), policy.total, headroom.cpu_weight,
+                        ).await {
+                            tracing::warn!(%error, "workload slice capacity refresh deferred");
+                        }
+                    }
+                    Err(error) => tracing::warn!(%error, "workload slice capacity refresh deferred"),
+                }
+                dirty.extend(broker.host_holds());
+            },
             _=limit_sampler.tick()=>{
                 if broker.scheduler_owner().await?.is_some() && let Err(error) = broker.sample_limits().await {
                     tracing::warn!(%error,"execution limit sampling deferred");

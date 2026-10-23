@@ -87,7 +87,7 @@ impl ExecutionHost for Fake {
         &self,
         _: sluice_model::ids::HomeId,
     ) -> Option<std::io::Result<sluice_runtime::headroom::HostReading>> {
-        self.memory.lock().unwrap().map(Ok)
+        self.memory.lock().unwrap().clone().map(Ok)
     }
 }
 struct Fixture {

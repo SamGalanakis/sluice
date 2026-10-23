@@ -475,16 +475,21 @@ pressure. Memory is unlimited at a
 level only with `"allow_unlimited_memory": true`: without it, a `null` (or `"unlimited"`)
 memory in `defaults`, `ceilings` or `total` is refused at load with an error naming the key,
 the size to set instead and the opt-in, so no run is ever uncapped by accident. Omitted fields
-use the defaults below. Explicit values must fit the host and each other; a smaller finite
-total clamps inherited ceilings and the shipped admission charge, a finite ceiling clamps
-inherited defaults (an inherited unlimited default becomes that ceiling), and an explicit value
-that does not fit is refused. The host's effective capacity is MemTotal and the CPU count,
-lowered by the nearest `memory.max` and `cpu.max` among the process's cgroup and its ancestors
-(for a user service, typically `user.slice`); a total above it is refused with an error naming
-that cgroup and its limit, e.g. `execution.total.memory (104 GiB) exceeds the host's effective
-memory: cgroup /user.slice has memory.max 96 GiB; …`. A malformed policy, invalid JSON or an
-unreadable configuration is an error at load: the coordinator does not start on it, and when
-the file goes bad while it serves, no step starts and `status` shows each ready step `held:
+use the defaults below. Explicit values must fit each other; a smaller configured finite
+total clamps inherited ceilings and the shipped admission charge, and a finite ceiling clamps
+inherited defaults (an inherited unlimited default becomes that ceiling). Zero, negative and
+otherwise malformed limits remain errors. `execution.total.memory` and `execution.total.cpus`
+are ceilings: their effective values are the smaller of the configured value and current host
+capacity. Host capacity is MemTotal and the CPUs available through affinity, lowered by the
+smallest `memory.max` and `cpu.max` in the process's cgroup ancestry. A configured total above
+current capacity is valid and never prevents plan edits or dry runs. `status.execution.total`
+shows the effective `memory_bytes` and `cpu_millis`, the `configured` totals, `clamped`, and
+`clamps` with both numbers and the limiting source (cgroup or CPU affinity/availability).
+Capacity is read again for admission and status; when a temporary restriction goes away, the
+effective total grows back up to the configured ceiling without a restart. An unlimited total
+has no configured ceiling and is still bounded by current host capacity. A malformed policy,
+invalid JSON or an unreadable configuration is an error at load: the coordinator does not start
+on it, and when the file goes bad while it serves, no step starts and `status` shows each ready step `held:
 invalid execution config (…)` and `execution.error`. A missing file or missing `execution`
 section selects the defaults below.
 
@@ -569,12 +574,12 @@ acknowledgement before it ends that live work; a durable result never allows una
 guardian processes.
 
 A policy change needs no drain. The scheduler notices a changed `config.json` within seconds
-and re-admits every project at once. The home's workload slice carries the total as
+and re-admits every project at once. The home's workload slice carries the effective total as
 `MemoryMax`, `CPUQuota`, `TasksMax` and `MemorySwapMax=0`, and `cpu_weight` as `CPUWeight`; the
-coordinator applies them when it starts, and each launch applies them with `systemctl --user
-set-property --runtime` when they differ and reads them back, and a slice that does not keep them
-fails the launch. CPU weight only orders siblings, so at start the coordinator also sets
-`CPUWeight` on the slices the home's slice is nested in (`sluice-workloads.slice` and
+coordinator applies them when it starts and refreshes them every 5 s as host capacity changes;
+each launch also applies them with `systemctl --user set-property --runtime` when they differ
+and reads them back, and a slice that does not keep them fails the launch. CPU weight only
+orders siblings, so at start the coordinator also sets `CPUWeight` on the slices the home's slice is nested in (`sluice-workloads.slice` and
 `sluice.slice`): under contention the user's other work (agents, editors, Sluice's own services)
 is scheduled ahead of the workloads, and `total.cpus` keeps the rest of the CPUs free of them. Existing runs keep their frozen caps; changes to run
 defaults and ceilings affect future admission only.
