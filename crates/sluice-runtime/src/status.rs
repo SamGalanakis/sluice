@@ -243,6 +243,31 @@ pub(crate) fn status(
                     .filter_map(|(step, status)| status.map(|s| (step, s)))
                     .collect::<BTreeMap<_, _>>()
             );
+            let steps: Vec<_> = plan
+                .units()
+                .get(
+                    &unit
+                        .parse::<UnitName>()
+                        .map_err(|e| sluice_store::StoreError::InvalidDatabase(e.to_string()))?,
+                )
+                .map(|u| u.steps.iter().map(|s| s.to_string()).collect())
+                .unwrap_or_default();
+            let mut due = vec![];
+            let mut classes = serde_json::Map::new();
+            for step in steps {
+                due.extend(crate::run_health::due(sql, id, &step, now)?);
+                let raw: Option<String> = sql.query_row(
+                    "SELECT error FROM steps WHERE project_id=?1 AND step_id=?2",
+                    (id.to_string(), &step),
+                    |r| r.get(0),
+                )?;
+                if let Some(raw) = raw {
+                    let error: PublicError = serde_json::from_str(&raw)?;
+                    classes.insert(step, json!(error.failure_class()));
+                }
+            }
+            row["check_due"] = json!(due);
+            row["failure_class"] = json!(classes);
             let named = names.naming.unit(&unit);
             row["title"] = json!(names.naming.unit_title(&unit));
             if let Some(recipe) = named.map(|n| n.recipe.as_str()).filter(|r| !r.is_empty()) {
@@ -280,6 +305,8 @@ pub(crate) fn status(
             continue;
         }
         let mut row: Value = serde_json::from_str(&row)?;
+        sluice_model::error::show_failure(&mut row);
+        row["check_due"] = json!(crate::run_health::due(sql, id, step.as_str(), now)?);
         if let Some(park) = parks.get(&step) {
             row["shown"] = json!("parked");
             row["parked"] = json!(park);

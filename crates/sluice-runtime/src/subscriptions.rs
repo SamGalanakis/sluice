@@ -22,6 +22,8 @@ use std::{collections::BTreeMap, time::Duration};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Stored {
     name: String,
+    #[serde(default)]
+    include_routine: bool,
     projects: Vec<ProjectId>,
     wake: Vec<Wake>,
     say_from_steps: StepSays,
@@ -119,6 +121,7 @@ pub async fn set(writer: &Writer, request: SubscriptionSet) -> Result<Value, Pub
                 identities::register(tx, p, &me)?;
             }
             let stored = Stored {
+                include_routine: request.include_routine,
                 name: request.name,
                 projects,
                 wake: request.wake,
@@ -194,6 +197,16 @@ fn kind(record: &Record) -> String {
 }
 fn matches(sql: &Connection, s: &Stored, record: &Record) -> sluice_store::Result<bool> {
     let has = |wake| s.wake.contains(&wake);
+    if let Event::Message(m) = &record.event
+        && m.from == "sluice"
+        && m.to.as_deref() == Some(&s.me)
+        && m.data
+            .as_ref()
+            .is_some_and(|d| d.as_value().get("run_check").is_some())
+    {
+        return Ok(true);
+    }
+
     Ok(match &record.event {
         Event::Message(m) if m.from != s.me => {
             let addressed =
@@ -251,6 +264,7 @@ pub async fn next(
     name: String,
     timeout: Duration,
     clock: Clock,
+    include_routine: Option<bool>,
 ) -> Result<NextResult, PublicError> {
     let gone = crate::coordinator::request_disconnected();
     let s: Stored =
@@ -321,7 +335,10 @@ pub async fn next(
                         .into_page()?;
                         let full = page.records.len() == 200;
                         for record in page.records {
-                            if matches(sql, &selected, &record)? {
+                            if (include_routine.unwrap_or(selected.include_routine)
+                                || !crate::routine::routine(sql, &record, Some(&selected.me))?)
+                                && matches(sql, &selected, &record)?
+                            {
                                 matching.push(record);
                             } else {
                                 *suppressed.entry(kind(&record)).or_default() += 1;

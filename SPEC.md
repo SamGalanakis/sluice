@@ -1575,6 +1575,40 @@ generation, work_generation, attempt_id, unit, declaration, inputs, inputs_hash,
 outputs, error, manual, run_ids, recorded_at, removed_at`). They are never trimmed and go with
 the project.
 
+### 7.11 Agent run checks and failure classes
+
+`project_update(check_age_seconds=N)` sets the interval for agent-run check notes in seconds,
+7200 by default; 0 disables them. At each elapsed multiple, the coordinator says once to the
+unit's current owner, else fallback, else owner. Its 30-second upkeep sweep catches a missed
+boundary once at the latest multiple. The per-run marker survives coordinator restarts. A
+setting change applies to live runs; it never stops or changes them. Parked time counts toward
+check age. The `say` has `data.run_check` with unit, step, run, engine, model including effort,
+elapsed_seconds, check_age_seconds, last_activity_at, last_activity_ago_seconds, last_message,
+parked and waiting resource names. Activity means the supervisor saw a transcript/tool event,
+not that its process is alive. Unknown activity stays null. The supervisor keeps its latest
+observation separately from its strict checkpoint; older pinned runs use readable transcripts
+and checkpoint words when available. `status` includes `check_due` on steps and units, a list
+of `{step, run, at, overdue}` with Unix-second `at` for the next boundary; disabled or ended
+runs contribute none.
+
+Failed runs store `runs.failure_class`, independent of the error's detailed kind:
+`provider_quota` for QuotaExhausted; `provider_unavailable` for auth or transport errors
+including 429 and 5xx; `stall` for StallCap; `wall_cap` for historical WallCap;
+`resource_kill` for memory/OOM or disk exhaustion; `no_submission` for an exit without required
+outputs; `task_rejected` for Rejected; `harness` otherwise, including explicit cancellation.
+Specific typed kinds take precedence over text. Only generic runner/provider error channels
+use transport and resource error text. Success has no failure class.
+
+Step status, its error and public step log records expose `failure_class`; unit status exposes
+it by step. Stored errors and record payloads retain the shape pinned older releases decode.
+`engine_report(project, since?)` is read-only, grouping agent attempts by engine and resolved
+model including effort. `since` is a timestamp; attempts begun at or after it count. Each row
+has attempts, succeeded and failed as counts by class. Running attempts count only toward
+attempts. Retried runs count separately. Completed runs retain engine/model with their class,
+including after the step retires. Historical runs derive what they can from their frozen
+inputs and retained agent metadata; an unidentifiable agent is omitted, never assigned a
+model by guessing its task text.
+
 ## 8. Messages
 
 Three verbs post a message; the thread and the sender are derived, never given, and the
@@ -1918,7 +1952,7 @@ shapes (an unknown status, an empty `any_of`, another field) are `invalid`, `err
 each (`steps: no step x`, `tags: no step is tagged t`, `until.any_of[1]: …`); a selected step
 removed from the plan during the wait ends it with the same error.
 
-`next(projects=[], since_seq?, me?, scope?, units?, tags?, timeout=300, all=false, settle=20,
+`next(projects=[], since_seq?, me?, scope?, units?, tags?, include_routine=false, timeout=300, all=false, settle=20,
 settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
 an orchestrator acts on, in its scope (§8.1, "What a session sees": a named session's own units
 and messages by default), and returns `{records, notes, last_seq, timed_out}`. Without
@@ -1944,7 +1978,9 @@ so sessions never share or move one cursor. It wakes on:
 - with `all`, any record in scope.
 
 A step's progress (§6.4) writes no record, so it wakes none of these waits, `all` included.
-Notes are held and returned in `notes`. After the first waking record it keeps collecting until
+Notes addressed to the named reader wake immediately too. Other notes are held and returned
+in `notes`. Check notes always wake their addressee, including a stored subscription whose
+wake list omits notes. After the first waking record it keeps collecting until
 `settle` seconds pass with nothing new, or `settle_max` seconds after the first. Messages come
 first in `records`. `settles` sets how much of a settled unit's step outputs are carried:
 `short` (booleans, numbers, strings up to 80 characters and a `summary`'s first line; the rest
@@ -1953,9 +1989,22 @@ named in `omitted`), `full` or `none`. Every call records the reader's position 
 
 `sluice next` is the same wait (§14), and `sluice watch` follows the log as JSON lines.
 
+By default both forms omit routine events from the returned batch and from wake decisions:
+the session's own bypass confirmations and cancel requests; capacity, memory and CPU holds
+or waits and CPU throttle notices; memory warnings whose outcome is not killed; engine probe
+observations; and land send-backs beginning `rebase onto origin/main conflicts in ` or
+`not ready: the work step submitted ready=false. Unresolved: awaiting slice`, only when the
+registered completion action actually retried the target work step. An unapplied action's
+failure remains visible. Unit settlements always retain their ordinary selection. Questions,
+replies, other notes to the reader, failures and check notes remain eligible. The filter
+applies even with `all=true`; `include_routine=true` restores routine events under the usual
+scope and wake selection. `log_read`, `log_wait` and `watch` keep the full log. A subscription
+stores its policy; `next(subscription=..., include_routine=true)` overrides it for that batch
+without changing it. Suppressed routine events count in the subscription digest.
+
 ### Stored subscriptions
 
-`subscription_set(name, projects, wake, me, say_from_steps="asks-only", digest?)` stores a
+`subscription_set(name, projects, wake, me, say_from_steps="asks-only", include_routine=false, digest?)` stores a
 home-wide named subscription. `projects` is a nonempty list of project selectors, resolved
 once to immutable IDs; `me` is a session name and its existing `mine` ownership scope (§8.1)
 applies. `wake` is a nonempty list of `ask`, `reply`, `failed`, `stale`, `settled`, `limit`,
@@ -1966,7 +2015,7 @@ cursor and revision token; `subscription_list()` lists them by name; `subscripti
 removes one (a missing name succeeds). These are coordinator tools on CLI and MCP. The CLI
 accepts repeated `--project` and comma-separated `--wake` for `subscription_set`.
 
-`next(subscription=name, timeout=300)` (shell: `sluice next --subscription name --timeout S`)
+`next(subscription=name, timeout=300, include_routine?)` (shell: `sluice next --subscription name --timeout S`)
 uses that stored filter and cursor. Do not supply projects, since_seq, scope, units, tags or
 all; its stored reader applies even when the client session changes. It subscribes before
 reading and checks every page of every selected project in one snapshot, returning every
@@ -2102,9 +2151,10 @@ step `not_found`.
 | tool | arguments | result |
 |---|---|---|
 | `docs` | `topic?` | the topic's markdown, or the index |
+| `engine_report` | `project`, `since?` | `{project_id, since, engines: [{engine, model, attempts, succeeded, failed: {class: count}}]}` (§7.11) |
 | `projects_list` | | `[{project_id, name, description, rev, settings_rev, counts, paused, archived, board_rev, resources?, limits?, icon?}]` (live projects, by name); `counts` maps step status to the plan's steps in it, `resources` each declared resource to `{capacity}` or `{capacity_fn}`, `icon` is `{kind: "image", type}` or `{kind: "text", text}` |
 | `project_create` | `name`, `description=""`, `icon?`, `resources={}`, `limits?` (§2.5), `author?` | `{project_id, name}` |
-| `project_update` | `project`, `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `limits?` (replaces the project defaults; null clears), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
+| `project_update` | `project`, `check_age_seconds?` (7200 by default, 0 disables checks), `new_name?`, `description?`, `icon?` (`""` removes), `resources?` (each key set, null removes), `limits?` (replaces the project defaults; null clears), `paused?`, `archived?`, `prune_done_after?` (seconds, null turns it off, §6.11), `prune_keep?` (patterns, `[]` or null clears), `fallback?` (`owner` or a registered `@session` that answers unowned units, null clears, §8.1), `expected_settings_rev?`, `reason?`, `author?` | `{project_id, name}`; changes write `project.rename`, `project.pause`, `project.archive`, `project.update` |
 | `board_set` | `project`, `program` (null clears), `expected_rev?`, `reason?`, `author?` | `{rev, warnings}`; a stale `expected_rev` is `conflict`, a program that does not check `invalid` with each problem as `line N: …` (a `Slot` is told it was replaced by `Doc`); validation runs before the store write transaction; the same program again changes nothing; writes `project.board`. `warnings` lists each step the program names that the plan cannot give it (`docs("board")`), as `line N: <Component> names step `x`, which is not in the plan` or `… selects `tag:x`, which no plan step carries`, and each Metric, Query or Chart whose SQL compares `status` with `'failed'` and never reads `error` (it counts the owner's cancels as failures: `Count` counts as the dashboard does); it never refuses |
 | `board_get` | `project` | `{project, rev, program}` (`rev` 0 and `program` null before any board) |
 | `board_doc_read` | `project` | `{rev, updated_at, author, markdown, numbered}`: the board's document (`rev` 0 and `markdown` "" before the first write), `numbered` its lines with right-aligned numbers and a tab, as `cat -n` |

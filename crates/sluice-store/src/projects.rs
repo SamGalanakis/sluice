@@ -518,6 +518,7 @@ fn check_name(name: &ProjectName) -> Result<()> {
 }
 #[derive(Debug, Clone, Default)]
 pub struct UpdateProject {
+    pub check_age_seconds: Option<u64>,
     pub new_name: Option<ProjectName>,
     pub description: Option<String>,
     pub icon: Option<Icon>,
@@ -614,6 +615,22 @@ pub fn project_update(
         )?;
     }
     let mut fields = Vec::new();
+    if let Some(age) = request.check_age_seconds {
+        let age = i64::try_from(age).map_err(|_| invalid("check_age_seconds is too large"))?;
+        let old: i64 = tx.sql().query_row(
+            "SELECT check_age_seconds FROM projects WHERE project_id=?1",
+            [id.to_string()],
+            |r| r.get(0),
+        )?;
+        if old != age {
+            tx.sql().execute(
+                "UPDATE projects SET check_age_seconds=?2 WHERE project_id=?1",
+                params![id.to_string(), age],
+            )?;
+            fields.push("check_age_seconds".into());
+        }
+    }
+
     if let Some(value) = description {
         tx.sql().execute(
             "UPDATE projects SET description=?2 WHERE project_id=?1",

@@ -101,9 +101,15 @@ pub fn reply_value(reply: CommandReply) -> Result<serde_json::Value, PublicError
     if let CommandReply::Ack = reply {
         return Ok(json!({"ok":true}));
     }
-    let value = serde_json::to_value(reply).map_err(|e| PublicError::Storage {
+    let records = matches!(&reply, CommandReply::Records(_) | CommandReply::Next(_));
+    let mut value = serde_json::to_value(reply).map_err(|e| PublicError::Storage {
         message: e.to_string(),
     })?;
+    if records && let Some(rows) = value["data"]["records"].as_array_mut() {
+        for row in rows {
+            sluice_model::error::show_failure(row);
+        }
+    }
     Ok(value
         .get("data")
         .cloned()

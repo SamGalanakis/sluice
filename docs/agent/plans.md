@@ -900,3 +900,42 @@ unknown resets use the same bounded backoff. Pauses and admission still apply. S
 `restart`, `restart_count`, and `restart_at` while waiting; units status has a `restart` map by
 step. Restart counts and the hourly budget survive a deploy. `step_retry` manually re-arms a
 cancelled step. This replaces external status-polling/retry loops.
+
+## Long-running agent checks
+
+`project_update(project, check_age_seconds=7200)` sets the interval for check notes. It defaults
+to two hours; 0 turns it off. At two hours, four hours and each later multiple, Sluice sends
+one note to the unit's current owner, else fallback, else the person. This only asks you to
+look. It never cancels or changes the run. The coordinator checks every 30 seconds and, after
+a restart, sends one catch-up note at the latest missed boundary.
+
+The note names the unit and step, engine and resolved model with effort, elapsed time, last
+observed agent activity and its age, the worker's latest words, and whether it is parked or
+waiting on a resource. Unknown activity says unknown. A live process alone is not agent
+activity. Parked time counts toward check age. Its structured `data.run_check` carries the
+same facts. Check notes wake `next`, including stored subscriptions, regardless of their
+note filter. `status` in both views has `check_due`, a list of `{step, run, at, overdue}`;
+`at` is the next check boundary in Unix seconds. Ended runs and disabled checks contribute
+none. Read the interval with `query`: `SELECT name, check_age_seconds FROM projects`.
+
+## Agent failure causes and engine health
+
+Each failed run keeps a `failure_class`; step status and its error expose it, the units view
+maps step to class, and public step log records carry it. The detailed error remains too.
+
+- `provider_quota`: a typed provider usage or credit cap.
+- `provider_unavailable`: auth or transport failures, including 429, 5xx and proxy errors.
+- `stall`: StallCap; `wall_cap`: a historical WallCap.
+- `resource_kill`: memory/OOM or disk exhaustion.
+- `no_submission`: the work ended without required outputs.
+- `task_rejected`: Rejected or an explicitly rejected task result.
+- `harness`: another runner error, including an explicit cancellation.
+
+Specific typed causes win over text. A StallCap that quotes a 429 remains `stall`.
+`engine_report(project, since="2026-10-25T00:00:00Z")` groups attempts by engine and resolved
+model including effort, with `attempts`, `succeeded`, and `failed` counts by class. Omit
+`since` for all retained runs. Running attempts count only toward attempts; each retry is
+another attempt. These are execution outcomes, not measurements of code quality. Historical
+runs with no identifiable agent are omitted; retained frozen inputs and agent metadata supply
+older engine/model labels when available. Stored error and log payloads keep compatibility
+with running agents pinned to older releases.

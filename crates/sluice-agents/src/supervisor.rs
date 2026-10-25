@@ -470,6 +470,14 @@ where
         wait = (wait * 2).min(Duration::from_secs(1));
     }
 }
+/// Latest observed agent event and words, kept apart from strict delivery checkpoints.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AgentObservation {
+    pub engine: String,
+    pub model: Option<String>,
+    pub last_activity_ms: Option<u64>,
+    pub last_message: String,
+}
 /// The guardian supplies durable observations and holds invocation containment authority.
 /// cleanup must prove all engine-owned descendants gone, including detached work. It must
 /// retain the supervisor/control process and remain callable after an interrupted adapter.
@@ -478,6 +486,14 @@ where
 /// with [`HostUnavailable`] once its patience is spent, which fails the run `Transient`. Any
 /// other error is definite and fails the run `Invalid`.
 pub trait SupervisorHost: Send {
+    fn observation(
+        &mut self,
+        observation: &AgentObservation,
+    ) -> impl Future<Output = io::Result<()>> + Send {
+        let _ = observation;
+        async { Ok(()) }
+    }
+
     fn snapshot(
         &mut self,
         after: MessageId,
@@ -1296,6 +1312,12 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         profile.reports_waiting,
         now,
     );
+    let observation = AgentObservation {
+        engine: config.engine.clone(),
+        model: model.as_ref().map(|m| m.id.clone()),
+        ..Default::default()
+    };
+    let _ = host.observation(&observation).await;
     let context = EngineContext {
         run_dir: config.run_dir.clone(),
         cwd: config.cwd.clone(),
@@ -1474,7 +1496,17 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
         let _ = machine.checkpoint.save(&config.run_dir);
         // The run's log carries the step error's own text, under its kind.
         if error.kind != FailureKind::Cancelled {
-            eprintln!("agent failed: {error}");
+            let class = sluice_model::error::PublicError::AgentFailure {
+                kind: format!("{:?}", error.kind),
+                message: error.message.clone(),
+                session: None,
+                retry_at: None,
+            }
+            .failure_class();
+            eprintln!(
+                "agent failed: {error}; failure_class={}",
+                serde_json::to_value(class).expect("class")
+            );
         }
         return Err(error);
     }
@@ -1837,6 +1869,22 @@ async fn run_invocation<E: EngineAdapter, H: SupervisorHost>(
             }
         } else {
             quiet.reset();
+        }
+        if o.activity > 0
+            && last
+                .as_ref()
+                .is_none_or(|prior: &EngineObservation| prior.activity != o.activity)
+        {
+            let observation = AgentObservation {
+                engine: config.engine.clone(),
+                model: context.model.as_ref().map(|m| m.id.clone()),
+                last_activity_ms: clock_ms().ok(),
+                last_message: crate::engines::account::redact(&o.final_text)
+                    .chars()
+                    .take(4000)
+                    .collect(),
+            };
+            let _ = host.observation(&observation).await;
         }
         let action = machine.update(now, &o, &snapshot.background_work, snapshot.leases_active)?;
         let observed = last.as_ref() != Some(&o);

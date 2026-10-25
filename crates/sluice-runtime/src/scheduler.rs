@@ -834,6 +834,7 @@ pub async fn run<H: ExecutionHost>(
                 if !std::mem::take(&mut adopted_at_start) {
                     broker.adopt().await?;
                 }
+                crate::run_health::check_at(&broker, crate::run_health::now_seconds()).await?;
                 upkeep(broker.writer(), broker.home(), projects).await?;
                 crate::calls::retain_calls(broker.writer()).await?;
                 retiring.tick(&broker).await;

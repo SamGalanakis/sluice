@@ -279,6 +279,7 @@ impl Default for ManualClock {
 
 #[derive(Debug, Clone)]
 pub struct NextOptions {
+    pub include_routine: bool,
     pub projects: Vec<ProjectId>,
     pub since_seq: Option<RecordSeq>,
     /// The waiting session, `@name`, or none (an unnamed reader, kept as
@@ -301,6 +302,7 @@ pub struct NextOptions {
 impl Default for NextOptions {
     fn default() -> Self {
         Self {
+            include_routine: false,
             projects: vec![],
             since_seq: None,
             me: None,
@@ -389,7 +391,11 @@ async fn batch(
             gathered.sort_by_key(|r| r.seq.0);
             let mut classified = vec![];
             for record in gathered {
-                let classification = if options.all {
+                let classification = if !options.include_routine
+                    && crate::routine::routine(sql, &record, options.me.as_deref())?
+                {
+                    Classification::Ignore
+                } else if options.all {
                     Classification::Wake
                 } else {
                     match &record.event {
@@ -411,7 +417,13 @@ async fn batch(
                                     msg,
                                     options.me.as_deref().filter(|_| mine),
                                 )?;
-                            if wake {
+                            if wake
+                                || (msg.verb == MessageVerb::Say
+                                    && options
+                                        .me
+                                        .as_deref()
+                                        .is_some_and(|me| msg.to.as_deref() == Some(me)))
+                            {
                                 Classification::Wake
                             } else if !msg.is_question()
                                 && options.me.as_deref() != Some(msg.from.as_str())
@@ -478,6 +490,7 @@ pub async fn next_command(
             name,
             Duration::from_secs(request.timeout_seconds.min(3600)),
             Clock::default(),
+            request.include_routine,
         )
         .await;
     }
@@ -503,6 +516,7 @@ pub async fn next_command(
         writer,
         reads,
         NextOptions {
+            include_routine: request.include_routine.unwrap_or(false),
             projects: selected,
             since_seq: request.since_seq,
             me,
@@ -966,6 +980,13 @@ pub fn line(
             error,
             ..
         } => {
+            let class = error.as_ref().map(|e| {
+                serde_json::to_value(e.failure_class())
+                    .expect("class")
+                    .as_str()
+                    .unwrap_or("harness")
+                    .to_owned()
+            });
             let tail = error
                 .as_ref()
                 .and_then(|e| {
@@ -976,9 +997,10 @@ pub fn line(
                 })
                 .unwrap_or_default();
             format!(
-                "STEP {step} {} -> {}{tail}",
+                "STEP {step} {} -> {}{}{tail}",
                 from.as_ref().unwrap_or(&StepStatus::Pending).as_str(),
-                to.as_str()
+                to.as_str(),
+                class.map(|c| format!(" [{c}]")).unwrap_or_default()
             )
         }
         Event::UnitSettled { unit, steps, .. } => {
@@ -1110,9 +1132,11 @@ pub fn render(
     let mut lines = vec![];
     for record in messages_first(result) {
         lines.push(if json_lines {
-            serde_json::to_string(record).map_err(|e| PublicError::Storage {
+            let mut value = serde_json::to_value(record).map_err(|e| PublicError::Storage {
                 message: e.to_string(),
-            })?
+            })?;
+            sluice_model::error::show_failure(&mut value);
+            value.to_string()
         } else {
             line(record, settles.clone(), cut, cancels)?
         });

@@ -256,7 +256,7 @@ needed a reply, else a note).
   `projects` is empty), in your scope (above): it wakes on a question to you, on a reply that
   answers a question, not written by you, on a step that failed, turned stale or was skipped,
   on a unit that settled, on a project paused or archived by someone else, on a new
-  fallback, and on an execution-limit notice to you: a `say` from `sluice` whose
+  fallback, and on a non-routine execution-limit notice to you: a `say` from `sluice` whose
   `data.execution_limit` is `{run, step, limit, value, observed, outcome, since?}` (a run's
   failed forks, memory at its cap or killed, CPU throttling, or a step held until the host
   has memory free; `docs("plans")`, Execution limits). The step's own run gets the same note in its
@@ -349,3 +349,25 @@ In Claude Code, run it under the Monitor tool so every record arrives as an even
     Monitor("sluice watch -p myproj --kinds step.status,message")
 
 `--threads step-work` narrows the messages to that thread.
+
+## Routine events in next
+
+A session's `next` and stored subscriptions omit these events by default:
+
+- Your own bypass confirmations and cancel requests.
+- Capacity, memory and CPU hold/wait notices, and CPU throttling notices.
+- Memory-cap warnings that killed nothing.
+- Engine probe observations.
+- Rebase-conflict handbacks and `awaiting slice` not-ready handbacks whose registered
+  completion action actually retried the work step. An unresolved failure still comes through.
+
+Other failures, questions, notes and replies to you, unit settlements and run check notes
+keep coming. Notes addressed to your named session now wake ordinary `next` too. Check notes
+also wake stored subscriptions even when their `wake` list omits `say-to-me`.
+
+`include_routine=true` restores routine events under the usual scope and wake selection,
+even with `all=true`. On a stored subscription, set it with `subscription_set` for its default,
+or give it to `next(subscription="lanes", include_routine=true)` for one batch. At the shell,
+use `sluice next --include-routine`. Filtered records advance the cursor; they remain in
+`log_read`, `log_wait` and `watch`. A subscription counts them in its suppressed digest.
+No grep wrapper is needed.

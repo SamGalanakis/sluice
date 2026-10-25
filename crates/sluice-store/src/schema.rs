@@ -24,6 +24,15 @@ pub(crate) const SCHEMA: &str = include_str!("../migrations/0004.sql");
 pub(crate) const TABLES: i64 = 27;
 /// Columns added after schema 4 homes exist. Earlier additions are folded into its DDL.
 const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
+    (
+        "projects",
+        "check_age_seconds",
+        "INTEGER NOT NULL DEFAULT 7200",
+    ),
+    ("runs", "check_notified", "INTEGER NOT NULL DEFAULT 0"),
+    ("runs", "failure_class", "TEXT"),
+    ("runs", "agent_engine", "TEXT"),
+    ("runs", "agent_model", "TEXT"),
     ("projects", "history_seen", "INTEGER NOT NULL DEFAULT 0"),
     (
         "projects",

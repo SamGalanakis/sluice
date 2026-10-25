@@ -413,6 +413,12 @@ impl Codex {
         if turn_id.is_some_and(|id| self.historical.contains(id)) {
             return Ok(());
         }
+        if event["method"]
+            .as_str()
+            .is_some_and(|method| method.starts_with("item/"))
+        {
+            self.observation.activity += 1;
+        }
         // Server requests are never silently accepted. Interactive questions cannot decide parent success.
         if event.get("id").is_some() && event.get("method").is_some() {
             self.observation.status = EngineStatus::Blocked;

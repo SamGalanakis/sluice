@@ -787,7 +787,12 @@ async fn say_to_owner(
                 project: ProjectSelector::Id(launch.invocation.project),
                 to: String::new(),
                 body: body.into(),
-                data: None,
+                data: body
+                    .starts_with("engine probe observation unavailable")
+                    .then(|| {
+                        JsonValue::try_from(json!({"routine":"engine_probe"}))
+                            .expect("probe metadata")
+                    }),
                 run: Some(launch.identity.run),
                 me: None,
                 owner: false,
@@ -934,6 +939,27 @@ impl SupervisorHost for RunHost {
             (meta.ino(), meta.size(), meta.mtime(), meta.mtime_nsec()).hash(&mut mark);
         }
         Some(mark.finish())
+    }
+    async fn observation(&mut self, observation: &AgentObservation) -> io::Result<()> {
+        let path = self.outer_dir.join("agent-observation.json");
+        let mut observation = observation.clone();
+        if observation.last_activity_ms.is_none()
+            && let Ok(bytes) = std::fs::read(&path)
+            && let Ok(previous) = serde_json::from_slice::<AgentObservation>(&bytes)
+        {
+            observation.last_activity_ms = previous.last_activity_ms;
+            observation.last_message = previous.last_message;
+        }
+        let temp = path.with_extension("json.tmp");
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&temp)?;
+        std::io::Write::write_all(&mut file, &serde_json::to_vec(&observation)?)?;
+        std::fs::rename(temp, path)
     }
     async fn checkpoint(&mut self, checkpoint: &Checkpoint) -> io::Result<()> {
         checkpoint.save(&self.directory)?;

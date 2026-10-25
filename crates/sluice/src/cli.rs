@@ -80,6 +80,8 @@ pub enum Mode {
         args: Vec<String>,
     },
     Next {
+        #[arg(long)]
+        include_routine: bool,
         /// Resume a stored subscription's filter and cursor.
         #[arg(long, conflicts_with_all = ["projects", "since_seq", "cursor", "me", "scope", "units", "tags", "all"])]
         subscription: Option<String>,
@@ -257,6 +259,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 tool(&home, args).await
             }
             Mode::Next {
+                include_routine,
                 subscription,
                 projects,
                 since_seq,
@@ -276,6 +279,7 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 next(
                     &home,
                     NextFlags {
+                        include_routine,
                         subscription,
                         projects,
                         since_seq,
@@ -478,6 +482,10 @@ const TOOLS: &[(&str, &str)] = &[
     ("fn_get", "one fn's manifest"),
     ("fn_save", "write a Python fn (manifest + main.py)"),
     ("recipe_list", "the project's recipes"),
+    (
+        "engine_report",
+        "agent attempts and outcomes per engine and model",
+    ),
     ("log_read", "read the log after a seq"),
     ("log_wait", "wait for new log records"),
     ("step_wait", "wait until steps reach a status"),
@@ -1403,7 +1411,10 @@ async fn tool(home: &Path, argv: Vec<String>) -> Result<(), PublicError> {
         }
         CommandRequest::FnGet { name, project } => fn_get(home, &name, project.as_ref()).await?,
         CommandRequest::LogRead(read) => {
-            serde_json::to_value(log_read_page(home, &read).await?).map_err(storage)?
+            return print_reply(
+                &name,
+                CommandReply::Records(log_read_page(home, &read).await?),
+            );
         }
         _ => unreachable!("local_tool covered"),
     };
@@ -1571,6 +1582,7 @@ fn docs_mode(topic: Option<String>) -> Result<(), PublicError> {
 // ---- sluice next ---------------------------------------------------------------
 
 struct NextFlags {
+    include_routine: bool,
     subscription: Option<String>,
     projects: Vec<String>,
     since_seq: Option<i64>,
@@ -1597,6 +1609,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     }
     if let Some(name) = flags.subscription {
         let request = CommandRequest::Next(Next {
+            include_routine: flags.include_routine.then_some(true),
             subscription: Some(name),
             projects: vec![],
             since_seq: None,
@@ -1624,7 +1637,9 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
             .map_err(|e| e.into_public(true))?;
         for record in &result.records {
             if flags.json {
-                println!("{}", serde_json::to_string(record).map_err(storage)?);
+                let mut value = serde_json::to_value(record).map_err(storage)?;
+                sluice_model::error::show_failure(&mut value);
+                println!("{value}");
             } else {
                 println!(
                     "{}",
@@ -1721,6 +1736,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     };
     let list = |values: Vec<String>| (!values.is_empty()).then_some(values);
     let request = CommandRequest::Next(Next {
+        include_routine: Some(flags.include_routine),
         subscription: None,
         projects,
         since_seq,

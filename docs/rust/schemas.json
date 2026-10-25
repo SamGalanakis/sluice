@@ -384,6 +384,16 @@
           }
         ]
       },
+      "limits": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LimitsOverride"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "icon": {
         "anyOf": [
           {
@@ -455,6 +465,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -569,6 +655,15 @@
     "title": "ProjectUpdate",
     "type": "object",
     "properties": {
+      "check_age_seconds": {
+        "description": "Agent run check interval in seconds. Default 7200; 0 disables notices.",
+        "type": [
+          "integer",
+          "null"
+        ],
+        "format": "uint64",
+        "minimum": 0
+      },
       "project": {
         "$ref": "#/$defs/ProjectSelector"
       },
@@ -602,6 +697,16 @@
         "anyOf": [
           {
             "$ref": "#/$defs/JsonMap"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "limits": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LimitsOverride"
           },
           {
             "type": "null"
@@ -782,6 +887,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       }
@@ -1531,7 +1712,7 @@
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -1625,6 +1806,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -3877,6 +4068,16 @@
       "inputs": {
         "$ref": "#/$defs/JsonMap"
       },
+      "limits": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/LimitsOverride"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
       "project": {
         "anyOf": [
           {
@@ -3951,6 +4152,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -4339,6 +4616,19 @@
     "title": "Next",
     "type": "object",
     "properties": {
+      "include_routine": {
+        "description": "Return routine operational events too. A subscription stores its own default.",
+        "type": [
+          "boolean",
+          "null"
+        ]
+      },
+      "subscription": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
       "projects": {
         "type": "array",
         "items": {
@@ -8115,6 +8405,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -8183,6 +8508,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -8199,15 +8533,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -8240,6 +8565,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -8533,6 +8865,18 @@
     "title": "NextResult",
     "type": "object",
     "properties": {
+      "suppressed": {
+        "description": "Subscription batches always carry a digest, including an empty one.",
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
       "records": {
         "type": "array",
         "items": {
@@ -9867,6 +10211,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -9935,6 +10314,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -9951,15 +10339,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -9992,6 +10371,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -10494,6 +10880,37 @@
               },
               "args": {
                 "$ref": "#/$defs/ProjectDelete"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "description": "Dashboard Undo of a recent board clear or resource removal.",
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "settings_undo"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "$ref": "#/$defs/ProjectId"
+                  },
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "project",
+                  "key"
+                ]
               }
             },
             "required": [
@@ -11112,6 +11529,75 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "read_notes"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "marks": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/MarkRead"
+                    }
+                  },
+                  "undo": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "marks",
+                  "undo"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "history_seen"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "$ref": "#/$defs/ProjectId"
+                  },
+                  "through": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0
+                  },
+                  "undo": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "project",
+                  "through"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "step_dismiss"
               },
               "args": {
@@ -11129,10 +11615,60 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "needs_dismiss"
+              },
+              "args": {
+                "$ref": "#/$defs/NeedsDismiss"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "fn_call"
               },
               "args": {
                 "$ref": "#/$defs/FnCall"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "engine_report"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "project": {
+                    "$ref": "#/$defs/ProjectSelector"
+                  },
+                  "since": {
+                    "description": "Include attempts started at or after this RFC 3339 timestamp.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "project"
+                ]
               }
             },
             "required": [
@@ -11214,6 +11750,93 @@
             "properties": {
               "command": {
                 "type": "string",
+                "const": "subscription_set"
+              },
+              "args": {
+                "$ref": "#/$defs/SubscriptionSet"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "subscription_get"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "subscription_list"
+              },
+              "args": {
+                "type": "object",
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "subscription_remove"
+              },
+              "args": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "name"
+                ]
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
                 "const": "query"
               },
               "args": {
@@ -11252,6 +11875,74 @@
               },
               "args": {
                 "$ref": "#/$defs/ReleaseLease"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "lease_acquire"
+              },
+              "args": {
+                "$ref": "#/$defs/LeaseAcquire"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "lease_release"
+              },
+              "args": {
+                "$ref": "#/$defs/LeaseRelease"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "lease_status"
+              },
+              "args": {
+                "$ref": "#/$defs/LeaseStatus"
+              }
+            },
+            "required": [
+              "command",
+              "args"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "const": "park"
+              },
+              "args": {
+                "$ref": "#/$defs/Park"
               }
             },
             "required": [
@@ -11352,6 +12043,16 @@
                   },
                   "resources": {
                     "$ref": "#/$defs/JsonMap"
+                  },
+                  "limits": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/LimitsOverride"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "author": {
                     "type": [
@@ -11849,6 +12550,15 @@
       "ProjectUpdate": {
         "type": "object",
         "properties": {
+          "check_age_seconds": {
+            "description": "Agent run check interval in seconds. Default 7200; 0 disables notices.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
@@ -11882,6 +12592,16 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
               },
               {
                 "type": "null"
@@ -12062,6 +12782,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -12637,7 +13433,7 @@
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -12731,6 +13527,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -14142,6 +14948,48 @@
           "dismissed"
         ]
       },
+      "NeedsDismiss": {
+        "description": "The owner sets items of a plan's Needs you aside (`dismissed`), or back: a stop (`stop:<step>`,\nkept against the step's generations, so a retry or a new failure brings it back), a quiet\nrun (`quiet:<step>`, its `stamp` the run's last activity in seconds since the epoch, so the\nrun going quiet again after writing brings it back) or a question (`ask:<message>`). Kept\nlike a read mark (`readers`, stream `needs`), never a log record; it changes nothing but\nwhat the owner's plan lists.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NeedsItem"
+            }
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "items",
+          "dismissed"
+        ]
+      },
+      "NeedsItem": {
+        "description": "One item of a plan's Needs you, as `NeedsDismiss` names it.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "stamp": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ]
+      },
       "FnCall": {
         "type": "object",
         "properties": {
@@ -14150,6 +14998,16 @@
           },
           "inputs": {
             "$ref": "#/$defs/JsonMap"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "project": {
             "anyOf": [
@@ -14384,6 +15242,19 @@
       "Next": {
         "type": "object",
         "properties": {
+          "include_routine": {
+            "description": "Return routine operational events too. A subscription stores its own default.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "subscription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "projects": {
             "type": "array",
             "items": {
@@ -14476,6 +15347,73 @@
           "none"
         ]
       },
+      "SubscriptionSet": {
+        "description": "Durable named event filters. Names belong to the home; projects are resolved at set time.",
+        "type": "object",
+        "properties": {
+          "include_routine": {
+            "type": "boolean",
+            "default": false
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProjectSelector"
+            }
+          },
+          "wake": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SubscriptionWake"
+            }
+          },
+          "say_from_steps": {
+            "$ref": "#/$defs/StepSays",
+            "default": "asks-only"
+          },
+          "digest": {
+            "description": "Optional digest interval, such as `30m`, `10s` or `1h`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "projects",
+          "wake",
+          "me"
+        ]
+      },
+      "SubscriptionWake": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "reply",
+          "failed",
+          "stale",
+          "settled",
+          "limit",
+          "quota",
+          "say-to-me"
+        ]
+      },
+      "StepSays": {
+        "type": "string",
+        "enum": [
+          "none",
+          "asks-only",
+          "all"
+        ]
+      },
       "Query": {
         "type": "object",
         "properties": {
@@ -14547,6 +15485,135 @@
         "required": [
           "lease",
           "run"
+        ]
+      },
+      "LeaseAcquire": {
+        "description": "`lease_acquire`: a running step's own section lease on a project resource, the lease\n`ctx.acquire` takes in a fn. Granted first-in-first-out within priority; released by\n`lease_release` or when the run ends.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "amount": {
+            "description": "How much of the resource (default 1).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "wait": {
+            "description": "Wait for the grant, up to `timeout_seconds` (default 600, at most 600). A wait that\ntimes out keeps the request in the queue.",
+            "type": "boolean",
+            "default": false
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "priority": {
+            "description": "The queue priority (higher first); default the step's priority.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "resource"
+        ]
+      },
+      "LeaseRelease": {
+        "description": "`lease_release`: give back a run's own section lease, or leave its queue.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "lease": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "lease"
+        ]
+      },
+      "LeaseStatus": {
+        "description": "`lease_status`: each resource's holders and queue.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "resource": {
+            "description": "One resource; default every resource of the project.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "Park": {
+        "description": "`park`: end the agent's turn and wait, without its lane, until `until` fires.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "until": {
+            "description": "`lease:<resource>[:<amount>]`, `pid:<n>` or `file:<absolute path>[:<marker>]`.",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "description": "Wake after this many seconds even when `until` has not fired; defaults to the\ninstallation park_timeout_seconds (3600). Explicit longer bounds are allowed.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "until"
         ]
       },
       "RegisterCompletionAction": {
@@ -15481,6 +16548,16 @@
               }
             ]
           },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "icon": {
             "anyOf": [
               {
@@ -15543,6 +16620,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -18006,6 +19159,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -18074,6 +19262,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -18090,15 +19287,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -18131,6 +19319,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -18323,6 +19518,18 @@
       "NextResult": {
         "type": "object",
         "properties": {
+          "suppressed": {
+            "description": "Subscription batches always carry a digest, including an empty one.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
           "records": {
             "type": "array",
             "items": {
@@ -19798,6 +21005,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -19866,6 +21108,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -19882,15 +21133,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -19923,6 +21165,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -21665,6 +22914,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -21733,6 +23017,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -21749,15 +23042,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -21790,6 +23074,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -23209,7 +24500,7 @@
         }
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -23303,6 +24594,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -23450,7 +24751,7 @@
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -23544,6 +24845,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -23935,7 +25246,7 @@
   "StepChanges": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "StepChanges",
-    "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+    "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
     "type": "object",
     "properties": {
       "run": {
@@ -24029,6 +25340,16 @@
         ]
       },
       "priority": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/JsonValue"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "limits": {
         "anyOf": [
           {
             "$ref": "#/$defs/JsonValue"
@@ -24470,7 +25791,7 @@
         }
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -24564,6 +25885,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -28403,6 +29734,37 @@
         "additionalProperties": false
       },
       {
+        "description": "Dashboard Undo of a recent board clear or resource removal.",
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "settings_undo"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectId"
+              },
+              "key": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "project",
+              "key"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
         "type": "object",
         "properties": {
           "command": {
@@ -29012,6 +30374,75 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "read_notes"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "marks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/MarkRead"
+                }
+              },
+              "undo": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "marks",
+              "undo"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "history_seen"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectId"
+              },
+              "through": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "undo": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "project",
+              "through"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "step_dismiss"
           },
           "args": {
@@ -29029,10 +30460,60 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "needs_dismiss"
+          },
+          "args": {
+            "$ref": "#/$defs/NeedsDismiss"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "fn_call"
           },
           "args": {
             "$ref": "#/$defs/FnCall"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "engine_report"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "project": {
+                "$ref": "#/$defs/ProjectSelector"
+              },
+              "since": {
+                "description": "Include attempts started at or after this RFC 3339 timestamp.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "project"
+            ]
           }
         },
         "required": [
@@ -29114,6 +30595,93 @@
         "properties": {
           "command": {
             "type": "string",
+            "const": "subscription_set"
+          },
+          "args": {
+            "$ref": "#/$defs/SubscriptionSet"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "subscription_get"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "subscription_list"
+          },
+          "args": {
+            "type": "object",
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "subscription_remove"
+          },
+          "args": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "name"
+            ]
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
             "const": "query"
           },
           "args": {
@@ -29152,6 +30720,74 @@
           },
           "args": {
             "$ref": "#/$defs/ReleaseLease"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "lease_acquire"
+          },
+          "args": {
+            "$ref": "#/$defs/LeaseAcquire"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "lease_release"
+          },
+          "args": {
+            "$ref": "#/$defs/LeaseRelease"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "lease_status"
+          },
+          "args": {
+            "$ref": "#/$defs/LeaseStatus"
+          }
+        },
+        "required": [
+          "command",
+          "args"
+        ],
+        "additionalProperties": false
+      },
+      {
+        "type": "object",
+        "properties": {
+          "command": {
+            "type": "string",
+            "const": "park"
+          },
+          "args": {
+            "$ref": "#/$defs/Park"
           }
         },
         "required": [
@@ -29252,6 +30888,16 @@
               },
               "resources": {
                 "$ref": "#/$defs/JsonMap"
+              },
+              "limits": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LimitsOverride"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
               "author": {
                 "type": [
@@ -29749,6 +31395,15 @@
       "ProjectUpdate": {
         "type": "object",
         "properties": {
+          "check_age_seconds": {
+            "description": "Agent run check interval in seconds. Default 7200; 0 disables notices.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "project": {
             "$ref": "#/$defs/ProjectSelector"
           },
@@ -29782,6 +31437,16 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonMap"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
               },
               {
                 "type": "null"
@@ -29962,6 +31627,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -30537,7 +32278,7 @@
         "pattern": "^[a-z0-9][a-z0-9_-]*$"
       },
       "StepChanges": {
-        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map. At least one field.",
+        "description": "A step's fields to change: each given field replaces that field, null removes it, an\nabsent one is left as it is. `in` replaces the whole binding map, omitting null entries.\nAt least one field.",
         "type": "object",
         "properties": {
           "run": {
@@ -30631,6 +32372,16 @@
             ]
           },
           "priority": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/JsonValue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
             "anyOf": [
               {
                 "$ref": "#/$defs/JsonValue"
@@ -32042,6 +33793,48 @@
           "dismissed"
         ]
       },
+      "NeedsDismiss": {
+        "description": "The owner sets items of a plan's Needs you aside (`dismissed`), or back: a stop (`stop:<step>`,\nkept against the step's generations, so a retry or a new failure brings it back), a quiet\nrun (`quiet:<step>`, its `stamp` the run's last activity in seconds since the epoch, so the\nrun going quiet again after writing brings it back) or a question (`ask:<message>`). Kept\nlike a read mark (`readers`, stream `needs`), never a log record; it changes nothing but\nwhat the owner's plan lists.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectId"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/NeedsItem"
+            }
+          },
+          "dismissed": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "items",
+          "dismissed"
+        ]
+      },
+      "NeedsItem": {
+        "description": "One item of a plan's Needs you, as `NeedsDismiss` names it.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "stamp": {
+            "type": "integer",
+            "format": "int64",
+            "default": 0
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "key"
+        ]
+      },
       "FnCall": {
         "type": "object",
         "properties": {
@@ -32050,6 +33843,16 @@
           },
           "inputs": {
             "$ref": "#/$defs/JsonMap"
+          },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "project": {
             "anyOf": [
@@ -32284,6 +34087,19 @@
       "Next": {
         "type": "object",
         "properties": {
+          "include_routine": {
+            "description": "Return routine operational events too. A subscription stores its own default.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "subscription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "projects": {
             "type": "array",
             "items": {
@@ -32376,6 +34192,73 @@
           "none"
         ]
       },
+      "SubscriptionSet": {
+        "description": "Durable named event filters. Names belong to the home; projects are resolved at set time.",
+        "type": "object",
+        "properties": {
+          "include_routine": {
+            "type": "boolean",
+            "default": false
+          },
+          "name": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ProjectSelector"
+            }
+          },
+          "wake": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SubscriptionWake"
+            }
+          },
+          "say_from_steps": {
+            "$ref": "#/$defs/StepSays",
+            "default": "asks-only"
+          },
+          "digest": {
+            "description": "Optional digest interval, such as `30m`, `10s` or `1h`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "me": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "projects",
+          "wake",
+          "me"
+        ]
+      },
+      "SubscriptionWake": {
+        "type": "string",
+        "enum": [
+          "ask",
+          "reply",
+          "failed",
+          "stale",
+          "settled",
+          "limit",
+          "quota",
+          "say-to-me"
+        ]
+      },
+      "StepSays": {
+        "type": "string",
+        "enum": [
+          "none",
+          "asks-only",
+          "all"
+        ]
+      },
       "Query": {
         "type": "object",
         "properties": {
@@ -32447,6 +34330,135 @@
         "required": [
           "lease",
           "run"
+        ]
+      },
+      "LeaseAcquire": {
+        "description": "`lease_acquire`: a running step's own section lease on a project resource, the lease\n`ctx.acquire` takes in a fn. Granted first-in-first-out within priority; released by\n`lease_release` or when the run ends.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "amount": {
+            "description": "How much of the resource (default 1).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "wait": {
+            "description": "Wait for the grant, up to `timeout_seconds` (default 600, at most 600). A wait that\ntimes out keeps the request in the queue.",
+            "type": "boolean",
+            "default": false
+          },
+          "timeout_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          },
+          "priority": {
+            "description": "The queue priority (higher first); default the step's priority.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "resource"
+        ]
+      },
+      "LeaseRelease": {
+        "description": "`lease_release`: give back a run's own section lease, or leave its queue.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "lease": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "lease"
+        ]
+      },
+      "LeaseStatus": {
+        "description": "`lease_status`: each resource's holders and queue.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "resource": {
+            "description": "One resource; default every resource of the project.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project"
+        ]
+      },
+      "Park": {
+        "description": "`park`: end the agent's turn and wait, without its lane, until `until` fires.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/ProjectSelector"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "until": {
+            "description": "`lease:<resource>[:<amount>]`, `pid:<n>` or `file:<absolute path>[:<marker>]`.",
+            "type": "string"
+          },
+          "timeout_seconds": {
+            "description": "Wake after this many seconds even when `until` has not fired; defaults to the\ninstallation park_timeout_seconds (3600). Explicit longer bounds are allowed.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0,
+            "default": null
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "project",
+          "run",
+          "until"
         ]
       },
       "RegisterCompletionAction": {
@@ -33329,6 +35341,16 @@
               }
             ]
           },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "icon": {
             "anyOf": [
               {
@@ -33391,6 +35413,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -35854,6 +37952,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -35922,6 +38055,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -35938,15 +38080,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -35979,6 +38112,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -36171,6 +38311,18 @@
       "NextResult": {
         "type": "object",
         "properties": {
+          "suppressed": {
+            "description": "Subscription batches always carry a digest, including an empty one.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
           "records": {
             "type": "array",
             "items": {
@@ -36880,6 +39032,16 @@
               }
             ]
           },
+          "limits": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LimitsOverride"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "icon": {
             "anyOf": [
               {
@@ -36942,6 +39104,82 @@
             "additionalProperties": {
               "$ref": "#/$defs/JsonValue"
             }
+          }
+        ]
+      },
+      "LimitsOverride": {
+        "description": "A layer's override. A field left out inherits; `null` (or the string `\"unlimited\"`) makes\nthat dimension unlimited; a value sets it. Unlimited is stored and shown as `null`.",
+        "type": "object",
+        "properties": {
+          "memory": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MemoryInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cpus": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/CpuInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tasks": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TasksInput"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "memory_above_ceiling": {
+            "description": "A step's or call's explicit request for a memory cap above the per-run ceiling, up to\nthe home total. On a project's limits it allows its steps to make that request; the\nproject's own memory stays within the ceiling.",
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MemoryInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "CpuInput": {
+        "anyOf": [
+          {
+            "type": "number",
+            "format": "double"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "TasksInput": {
+        "anyOf": [
+          {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          {
+            "type": "string"
           }
         ]
       },
@@ -39405,6 +41643,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -39473,6 +41746,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -39489,15 +41771,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -39530,6 +41803,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -39722,6 +42002,18 @@
       "NextResult": {
         "type": "object",
         "properties": {
+          "suppressed": {
+            "description": "Subscription batches always carry a digest, including an empty one.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            }
+          },
           "records": {
             "type": "array",
             "items": {
@@ -41408,6 +43700,41 @@
           {
             "type": "object",
             "properties": {
+              "resource": {
+                "$ref": "#/$defs/ExhaustedResource"
+              },
+              "limit": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "peak": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string",
+                "const": "resource_exhausted"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "error",
+              "resource",
+              "limit",
+              "message"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
               "message": {
                 "type": "string"
               },
@@ -41476,6 +43803,15 @@
           {
             "type": "object",
             "properties": {
+              "retry_at": {
+                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
               "kind": {
                 "type": "string",
                 "default": "AgentFailure"
@@ -41492,15 +43828,6 @@
               "error": {
                 "type": "string",
                 "const": "agent_failure"
-              },
-              "retry_at": {
-                "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint64",
-                "minimum": 0
               }
             },
             "additionalProperties": false,
@@ -41533,6 +43860,13 @@
               "message"
             ]
           }
+        ]
+      },
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
         ]
       },
       "LeaseState": {
@@ -42090,6 +44424,41 @@
       {
         "type": "object",
         "properties": {
+          "resource": {
+            "$ref": "#/$defs/ExhaustedResource"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "peak": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string",
+            "const": "resource_exhausted"
+          }
+        },
+        "additionalProperties": false,
+        "required": [
+          "error",
+          "resource",
+          "limit",
+          "message"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
           "message": {
             "type": "string"
           },
@@ -42158,6 +44527,15 @@
       {
         "type": "object",
         "properties": {
+          "retry_at": {
+            "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
           "kind": {
             "type": "string",
             "default": "AgentFailure"
@@ -42174,15 +44552,6 @@
           "error": {
             "type": "string",
             "const": "agent_failure"
-          },
-          "retry_at": {
-            "description": "Earliest safe retry, as a Unix second (for example a usage-limit reset).",
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint64",
-            "minimum": 0
           }
         },
         "additionalProperties": false,
@@ -42215,7 +44584,16 @@
           "message"
         ]
       }
-    ]
+    ],
+    "$defs": {
+      "ExhaustedResource": {
+        "type": "string",
+        "enum": [
+          "memory",
+          "tasks"
+        ]
+      }
+    }
   },
   "Delivery": {
     "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -990,6 +990,7 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
     .await
     .unwrap();
     let config = SubscriptionSet {
+        include_routine: false,
         name: "lanes".into(),
         projects: vec![format!("id:{p}").parse().unwrap()],
         wake: vec![SubscriptionWake::Ask, SubscriptionWake::SayToMe],
@@ -1008,6 +1009,7 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
                 "lanes".into(),
                 Duration::from_secs(3600),
                 Clock::Manual(clock),
+                None,
             )
             .await
         })
@@ -1059,6 +1061,7 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
                 "lanes".into(),
                 Duration::from_secs(3600),
                 Clock::Manual(clock),
+                None,
             )
             .await
         })
@@ -1091,6 +1094,7 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
         "lanes".into(),
         Duration::ZERO,
         Clock::Manual(clock.clone()),
+        None,
     )
     .await
     .unwrap();
@@ -1113,6 +1117,7 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
         "lanes".into(),
         Duration::ZERO,
         Clock::Manual(clock.clone()),
+        None,
     )
     .await
     .unwrap();
@@ -1128,9 +1133,16 @@ async fn subscription_suppresses_chatter_and_asks_bypass_the_digest() {
     .await
     .unwrap();
     post(&w, p, "queued", "worker", Some("@orch"), false, None).await;
-    let all = subscriptions::next(&w, &r, "lanes".into(), Duration::ZERO, Clock::Manual(clock))
-        .await
-        .unwrap();
+    let all = subscriptions::next(
+        &w,
+        &r,
+        "lanes".into(),
+        Duration::ZERO,
+        Clock::Manual(clock),
+        None,
+    )
+    .await
+    .unwrap();
     assert_eq!(all.records.len(), 1);
     subscriptions::remove(&w, "lanes".into()).await.unwrap();
     w.shutdown().await.unwrap();
@@ -1155,6 +1167,7 @@ async fn subscription_wake_kinds_select_typed_events() {
         subscriptions::set(
             &w,
             SubscriptionSet {
+                include_routine: false,
                 name: (*name).into(),
                 projects: vec![format!("id:{p}").parse().unwrap()],
                 wake: vec![*wake],
@@ -1222,14 +1235,15 @@ async fn subscription_wake_kinds_select_typed_events() {
     )
     .await;
     for (name, _, expected) in cases {
-        let got = subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default())
+        let got = subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default(), None)
             .await
             .unwrap();
         assert_eq!(got.records.len(), expected, "{name}: {got:?}");
         assert!(!got.timed_out);
-        let empty = subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default())
-            .await
-            .unwrap();
+        let empty =
+            subscriptions::next(&w, &r, name.into(), Duration::ZERO, Clock::default(), None)
+                .await
+                .unwrap();
         assert!(
             empty.records.is_empty(),
             "{name} repeated a delivered record"

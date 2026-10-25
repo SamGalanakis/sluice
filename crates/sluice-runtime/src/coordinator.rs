@@ -2024,6 +2024,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                     {
                         return Err(conflict("stale completion").into());
                     }
+                    crate::run_health::record_agent(tx, evidence.identity.run)?;
                     record_resource_usage(tx, &evidence)?;
                     Ok(())
                 })
@@ -2034,7 +2035,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 PayloadResult::Succeeded(_) => None,
                 PayloadResult::Failed(e) => Some(e),
                 PayloadResult::Cancelled(message) => Some(PublicError::Cancelled { message }),
-                PayloadResult::Rejected(message) => Some(PublicError::FnFailure { message }),
+                PayloadResult::Rejected(message) => Some(PublicError::Rejected { message }),
                 PayloadResult::Lost(message) | PayloadResult::Unknown(message) => {
                     Some(PublicError::ProcessLost { message })
                 }
@@ -2056,7 +2057,7 @@ impl<H: ExecutionHost> Coordinator<H> {
                 if !calls::complete_in(tx, request)? {
                     return Err(conflict("stale call completion").into());
                 }
-                if !completed { record_resource_usage(tx, &evidence)?; }
+                if !completed { crate::run_health::record_agent(tx, evidence.identity.run)?; record_resource_usage(tx, &evidence)?; }
                 Ok(())
             }).await?;
         }
@@ -3383,6 +3384,7 @@ fn mutate_project(
                 tx,
                 &update.project,
                 projects::UpdateProject {
+                    check_age_seconds: update.check_age_seconds,
                     new_name: update.new_name,
                     description: update.description,
                     icon: update.icon.map(projects::Icon::try_from).transpose()?,

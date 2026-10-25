@@ -10,6 +10,7 @@ mod me;
 mod park;
 mod record_reader;
 mod release;
+mod retro_core;
 mod schema_migrate;
 mod scratch;
 mod ship;

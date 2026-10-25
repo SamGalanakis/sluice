@@ -1176,7 +1176,7 @@ pub fn complete_frozen(
     } else {
         match &kind {
             CompletionKind::Succeeded => None,
-            CompletionKind::Rejected { message } => Some(PublicError::FnFailure {
+            CompletionKind::Rejected { message } => Some(PublicError::Rejected {
                 message: message.clone(),
             }),
             CompletionKind::Failed(error) => Some(error.clone()),
@@ -1277,6 +1277,17 @@ pub fn complete_frozen(
     } else {
         StepStatus::Failed
     };
+    let failure_class = error
+        .as_ref()
+        .map(|e| serde_json::to_value(e.failure_class()))
+        .transpose()?;
+    tx.sql().execute(
+        "UPDATE runs SET failure_class=?2 WHERE run_id=?1",
+        params![
+            id.run.to_string(),
+            failure_class.and_then(|v| v.as_str().map(str::to_owned))
+        ],
+    )?;
     let at = plans::now()?;
     tx.sql().execute(
         "UPDATE attempts SET phase='terminal',finished_at=?2 WHERE attempt_id=?1",

@@ -198,6 +198,7 @@ fn native_next_and_http_read_message_records_across_project_rename() {
     }
 
     let request = CommandRequest::Next(Next {
+        include_routine: None,
         subscription: None,
         projects: vec![ProjectSelector::Id(id)],
         since_seq: Some(cursor),

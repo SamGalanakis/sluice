@@ -205,6 +205,12 @@ impl ClaudeState {
         }
         self.observation.session_id = Some(hook.session_id.clone());
         self.observation.progress += 1;
+        if matches!(
+            hook.hook_event_name.as_str(),
+            "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "Stop" | "StopFailure"
+        ) {
+            self.observation.activity += 1;
+        }
         self.idle_since = None;
         match hook.hook_event_name.as_str() {
             "SessionStart" => {
@@ -278,6 +284,7 @@ impl ClaudeState {
     }
     pub fn transcript(&mut self, entry: &Value, main: bool) {
         self.observation.progress += 1;
+        self.observation.activity += 1;
         let main = main && entry.get("isSidechain").and_then(Value::as_bool) != Some(true);
         let kind = entry["type"].as_str().unwrap_or_default();
         if main

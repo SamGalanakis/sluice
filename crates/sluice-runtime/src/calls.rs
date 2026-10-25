@@ -636,6 +636,17 @@ pub(crate) fn complete_in(
     } else {
         StepStatus::Succeeded
     };
+    let class = error
+        .as_ref()
+        .map(|e| serde_json::to_value(e.failure_class()))
+        .transpose()?;
+    tx.sql().execute(
+        "UPDATE runs SET failure_class=?2 WHERE run_id=?1",
+        (
+            request.call.to_string(),
+            class.and_then(|v| v.as_str().map(str::to_owned)),
+        ),
+    )?;
     let result = serde_json::json!({"status":status,"outputs":request.outputs,"error":error});
     let at = timestamp(tx)?;
     tx.sql().execute(
@@ -784,7 +795,10 @@ pub async fn dispatch_p3_04<
         commands::{CommandReply, CommandRequest},
         rpc::JsonValue,
     };
-    let data = |value: serde_json::Value| JsonValue::try_from(value).map(CommandReply::Data);
+    let data = |mut value: serde_json::Value| {
+        sluice_model::error::show_failure(&mut value);
+        JsonValue::try_from(value).map(CommandReply::Data)
+    };
     let reply = match request {
         CommandRequest::FnCall(request) => data(
             serde_json::to_value(calls.fn_call(request).await?).map_err(|e| {

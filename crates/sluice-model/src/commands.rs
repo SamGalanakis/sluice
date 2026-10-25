@@ -76,6 +76,9 @@ impl From<String> for IconUpload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectUpdate {
+    /// Agent run check interval in seconds. Default 7200; 0 disables notices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_age_seconds: Option<u64>,
     pub project: ProjectSelector,
     pub new_name: Option<ProjectName>,
     pub description: Option<String>,
@@ -833,6 +836,8 @@ pub struct StepWaitResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionSet {
+    #[serde(default)]
+    pub include_routine: bool,
     pub name: String,
     pub projects: Vec<ProjectSelector>,
     pub wake: Vec<SubscriptionWake>,
@@ -867,6 +872,9 @@ pub enum StepSays {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Next {
+    /// Return routine operational events too. A subscription stores its own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_routine: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscription: Option<String>,
     pub projects: Vec<ProjectSelector>,
@@ -1378,6 +1386,11 @@ pub enum CommandRequest {
     StepDismiss(StepDismiss),
     NeedsDismiss(NeedsDismiss),
     FnCall(FnCall),
+    EngineReport {
+        project: ProjectSelector,
+        /// Include attempts started at or after this RFC 3339 timestamp.
+        since: Option<String>,
+    },
     LogRead(LogRead),
     LogWait(LogWait),
     StepWait(StepWait),

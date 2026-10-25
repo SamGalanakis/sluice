@@ -127,6 +127,9 @@ pub struct EngineObservation {
     /// Positive evidence the engine did not accept these inputs. Mere silence is insufficient.
     pub not_accepted: Vec<InputId>,
     pub progress: u64,
+    /// Transcript or tool events observed in this invocation, excluding heartbeats and input acknowledgements.
+    #[serde(default)]
+    pub activity: u64,
     pub error: Option<EngineError>,
 }
 impl Default for EngineObservation {
@@ -143,6 +146,7 @@ impl Default for EngineObservation {
             acknowledged: vec![],
             not_accepted: vec![],
             progress: 0,
+            activity: 0,
             error: None,
         }
     }

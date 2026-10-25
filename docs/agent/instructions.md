@@ -108,3 +108,10 @@ For a standing orchestrator watcher, create a named filter with
 me="@you", digest="30m")`, then hold `next(subscription=name)`. Its cursor and filter survive
 client restarts and compactions. Default `say_from_steps="asks-only"` counts unsolicited
 step chatter in the digest without waking. See `docs("threads")` for the shell recipe.
+
+`next` filters routine operational chatter by default, including your own bypass/cancel
+confirmations, resource holds, nonfatal memory warnings, engine probes and completed land
+send-backs. Use `include_routine=true` for those records. Run check notes always come through;
+`project_update(check_age_seconds=7200)` sets their interval, 0 disables them. Read execution
+health by model with `engine_report(project, since?)`, which separates provider outages from
+task rejections. See `docs("plans")` and `docs("threads")` for fields and filter rules.

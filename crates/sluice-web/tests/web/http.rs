@@ -237,6 +237,7 @@ async fn canonical_urls_survive_rename_and_stale_names_do_not_redirect() {
                 tx,
                 &ProjectSelector::Id(id),
                 projects::UpdateProject {
+                    check_age_seconds: None,
                     new_name: Some("renamed".parse().unwrap()),
                     author: "test".into(),
                     ..Default::default()

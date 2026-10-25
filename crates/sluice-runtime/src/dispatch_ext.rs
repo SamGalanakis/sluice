@@ -235,6 +235,17 @@ pub async fn dispatch_ext<H: ExecutionHost>(
             }
             data(out)?
         }
+        CommandRequest::EngineReport { project, since } => {
+            let value = broker
+                .reads()
+                .snapshot(move |sql| {
+                    let project = messages::resolve_project(sql, &project)?;
+                    crate::run_health::report(sql, project, since)
+                })
+                .await
+                .map_err(public)?;
+            data(value)?
+        }
         CommandRequest::Query(request) => {
             let home = broker.home().to_owned();
             let params = request
@@ -417,6 +428,7 @@ async fn log_wait<H: ExecutionHost>(
         .map(sluice_model::identity::SessionName::parse)
         .transpose()?;
     let options = crate::watch::NextOptions {
+        include_routine: false,
         me: me.as_ref().map(ToString::to_string),
         scope: request.scope,
         units: request.units.clone().unwrap_or_default(),

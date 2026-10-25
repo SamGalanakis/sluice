@@ -408,6 +408,7 @@ impl settings::SettingsCommands for SocketSettings {
         Box::pin(async move {
             self.client
                 .command(CommandRequest::ProjectUpdate(ProjectUpdate {
+                    check_age_seconds: None,
                     project: ProjectSelector::Id(id),
                     new_name: request.new_name,
                     limits: request.limits,

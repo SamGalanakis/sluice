@@ -194,6 +194,12 @@ impl Devin {
             self.observation.session_id = Some(sid.clone());
         }
         self.observation.progress += 1;
+        if matches!(
+            hook.hook_event_name.as_str(),
+            "PreToolUse" | "PostToolUse" | "PostToolUseFailure" | "Stop"
+        ) {
+            self.observation.activity += 1;
+        }
         self.last_hook = Some(Instant::now());
         match hook.hook_event_name.as_str() {
             "UserPromptSubmit" => {
