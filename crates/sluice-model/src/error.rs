@@ -107,23 +107,21 @@ impl PublicError {
             Self::ResourceExhausted { .. } => ResourceKill,
             Self::ExitedWithoutSubmit { .. } => NoSubmission,
             Self::Rejected { .. } => TaskRejected,
-            Self::Transient { message } | Self::FnFailure { message } => transport_class(message),
+            Self::Transient { message } => transport_class(message),
+            Self::FnFailure { message } => {
+                if resource_exhaustion(message) {
+                    ResourceKill
+                } else {
+                    Harness
+                }
+            }
             _ => Harness,
         }
     }
 }
 fn transport_class(message: &str) -> FailureClass {
     let text = message.to_ascii_lowercase();
-    if [
-        "no space left on device",
-        "disk full",
-        "out of memory",
-        "oom-kill",
-        "oom kill",
-    ]
-    .iter()
-    .any(|s| text.contains(s))
-    {
+    if resource_exhaustion(message) {
         FailureClass::ResourceKill
     } else if text.split(|c: char| !c.is_ascii_digit()).any(|s| {
         s.parse::<u16>()
@@ -144,6 +142,18 @@ fn transport_class(message: &str) -> FailureClass {
     } else {
         FailureClass::Harness
     }
+}
+fn resource_exhaustion(message: &str) -> bool {
+    let text = message.to_ascii_lowercase();
+    [
+        "no space left on device",
+        "disk full",
+        "out of memory",
+        "oom-kill",
+        "oom kill",
+    ]
+    .iter()
+    .any(|s| text.contains(s))
 }
 /// Enrich only a known error-bearing tool row; persisted errors retain their old shape.
 pub fn show_failure(row: &mut serde_json::Value) {

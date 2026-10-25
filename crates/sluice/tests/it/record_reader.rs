@@ -141,11 +141,11 @@ impl Drop for Server {
 
 fn assert_messages(result: &NextResult, id: ProjectId) {
     assert!(!result.timed_out);
-    assert_eq!(result.records.len(), 1);
-    assert_eq!(result.notes.len(), 1);
+    assert_eq!(result.records.len(), 2);
+    assert!(result.notes.is_empty());
     for (record, body) in [
-        (&result.notes[0], "note after rename"),
-        (&result.records[0], "question after rename"),
+        (&result.records[0], "note after rename"),
+        (&result.records[1], "question after rename"),
     ] {
         assert_eq!(record.project, Some(id));
         let Event::Message(message) = &record.event else {
@@ -208,7 +208,7 @@ fn native_next_and_http_read_message_records_across_project_rename() {
         tags: None,
         timeout_seconds: 1,
         all: false,
-        settle_seconds: 0,
+        settle_seconds: 1,
         settle_max_seconds: 0,
         settles: Settles::Full,
     });
@@ -226,15 +226,12 @@ fn native_next_and_http_read_message_records_across_project_rename() {
         panic!("expected next reply")
     };
     assert_messages(&native, id);
-    let http: NextResult = decode_json(&server.http("next", json!({"projects":[format!("id:{id}")], "since_seq":cursor, "timeout":1, "settle":0, "settle_max":0, "me":"@orch"}))).unwrap();
+    let http: NextResult = decode_json(&server.http("next", json!({"projects":[format!("id:{id}")], "since_seq":cursor, "timeout":1, "settle":1, "settle_max":0, "me":"@orch"}))).unwrap();
     assert_eq!(http, native);
     let log: RecordPage = decode_json(&server.http(
         "log_read",
         json!({"project":"renamed-record-at", "since_seq":cursor, "kinds":["message"]}),
     ))
     .unwrap();
-    assert_eq!(
-        log.records,
-        vec![native.notes[0].clone(), native.records[0].clone()]
-    );
+    assert_eq!(log.records, native.records);
 }

@@ -365,6 +365,13 @@ async fn agent_failures_report_operational_causes_to_a_peer() {
         })
     };
     let cases = vec![
+        (
+            "task-text",
+            "harness",
+            PayloadResult::Failed(PublicError::FnFailure {
+                message: "expected 503 outputs".into(),
+            }),
+        ),
         ("quota", "provider_quota", agent("QuotaExhausted", "quota")),
         (
             "provider",
@@ -461,7 +468,7 @@ async fn agent_failures_report_operational_causes_to_a_peer() {
     let row = &report["engines"][0];
     assert_eq!(row["engine"], "codex");
     assert_eq!(row["model"], "gpt-6.1-sol@high");
-    assert_eq!(row["attempts"], 12);
+    assert_eq!(row["attempts"], cases.len() + 2);
     assert_eq!(row["succeeded"], 1);
     for class in [
         "provider_quota",
