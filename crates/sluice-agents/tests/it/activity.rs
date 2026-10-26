@@ -392,10 +392,8 @@ fn run_time_split_follows_yielded_command_sessions_across_model_work() {
                 payload["type"] = json!("custom_tool_call");
                 payload["input"] = json!(command);
                 payload.as_object_mut().unwrap().remove("arguments");
-            } else if wrapped {
-                if let Some(output) = payload.get_mut("output") {
-                    *output = json!([{"type":"input_text","text":output.as_str().unwrap()}]);
-                }
+            } else if wrapped && let Some(output) = payload.get_mut("output") {
+                *output = json!([{"type":"input_text","text":output.as_str().unwrap()}]);
             }
             (at, payload)
         });
