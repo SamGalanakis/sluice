@@ -716,3 +716,154 @@ async fn next_filters_routine_notices_for_sessions_and_subscriptions() {
         .await;
     f.close().await;
 }
+
+/// A departed pipe consumer used to leave a quiet CLI waiting indefinitely, holding
+/// its caller's inherited descriptors. Killing it must not obstruct a replacement.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn next_cli_exits_when_output_closes_and_a_killed_waiter_can_be_replaced() {
+    use std::process::Stdio;
+    let f = Fixture::new().await;
+    f.call(
+        "subscription_set",
+        json!({"name":"all","wake":["ask"],"me":"@peer"}),
+    )
+    .await;
+    let spawn = || {
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_sluice"))
+            .env("SLUICE_HOME", f.home.path())
+            .env("SLUICE_ME", "@peer")
+            .env("TOKIO_WORKER_THREADS", "2")
+            .env_remove("SLUICE_RUN_ID")
+            .env_remove("SLUICE_PROJECT_ID")
+            .env_remove("SLUICE_STEP")
+            .args(["next", "--subscription", "all", "--timeout", "3600"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    };
+    let mut broken_pipe = spawn();
+    drop(broken_pipe.stdout.take());
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        broken_pipe.wait_with_output(),
+    )
+    .await
+    .expect("CLI retained a closed stdout pipe")
+    .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    f.call(
+        "say",
+        json!({"project":"p","me":"@parent","to":"owner","body":"register parent fixture"}),
+    )
+    .await;
+    f.call(
+        "project_update",
+        json!({"project":"p","me":"@parent","fallback":"@parent"}),
+    )
+    .await;
+    // Keep the output reader alive while the shell parent exits: the parent pidfd,
+    // rather than a broken pipe, must end this wait.
+    use tokio::io::{AsyncBufReadExt, BufReader};
+    let mut parent = tokio::process::Command::new("bash")
+        .env("SLUICE_HOME", f.home.path())
+        .env("SLUICE_ME", "@parent")
+        .env("TOKIO_WORKER_THREADS", "2")
+        .env_remove("SLUICE_RUN_ID")
+        .env_remove("SLUICE_PROJECT_ID")
+        .env_remove("SLUICE_STEP")
+        .args([
+            "-c",
+            "\"$1\" next --all --timeout 3600 & child=$!; printf '%s\\n' \"$child\"; read -r line",
+            "wait-parent",
+            env!("CARGO_BIN_EXE_sluice"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut lines = BufReader::new(parent.stdout.take().unwrap()).lines();
+    let pid: u32 = lines.next_line().await.unwrap().unwrap().parse().unwrap();
+    // A live heartbeat proves that the child initialized before its parent leaves.
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let query = f.call("query", json!({"sql":"SELECT count(*) FROM readers WHERE identity='@parent' AND heartbeat_at IS NOT NULL"})).await;
+            if query["rows"][0][0].as_i64().unwrap() > 0 { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    let child = sluice_process::identity::OwnedProcess::capture(pid).unwrap();
+    let exited = tokio::io::unix::AsyncFd::new(child.pidfd()).unwrap();
+    drop(parent.stdin.take());
+    assert!(!parent.wait().await.unwrap().success()); // read sees EOF
+    let gone = tokio::time::timeout(std::time::Duration::from_secs(1), exited.readable()).await;
+    if gone.is_err() {
+        child
+            .signal(sluice_process::identity::Signal::KILL)
+            .unwrap();
+    }
+    let _ = gone.expect("CLI outlived its parent").unwrap();
+    drop(lines);
+    f.call(
+        "say",
+        json!({"project":"p","me":"@peer","to":"owner","body":"register replacement fixture"}),
+    )
+    .await;
+    f.call("project_update", json!({"project":"p","fallback":"@peer"}))
+        .await;
+    let mut killed = spawn();
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            let query = f.call("query", json!({"sql":"SELECT count(*) FROM readers WHERE identity='@peer' AND heartbeat_at IS NOT NULL"})).await;
+            if query["rows"][0][0].as_i64().unwrap() > 0 { break; }
+            tokio::task::yield_now().await;
+        }
+    }).await.unwrap();
+    killed.kill().await.unwrap();
+    f.call("project_create", json!({"name":"q"})).await;
+    f.call("next", json!({"projects":["q"],"me":"@peer","timeout":0}))
+        .await;
+    f.call(
+        "ask",
+        json!({"project":"q","me":"@sender","to":"@peer","body":"after kill"}),
+    )
+    .await;
+    let batch = f
+        .tool("next", json!({"subscription":"all","timeout":0}))
+        .await;
+    assert_eq!(batch["records"].as_array().unwrap().len(), 1);
+    assert_eq!(batch["records"][0]["body"], "after kill");
+    let empty = f
+        .tool("next", json!({"subscription":"all","timeout":0}))
+        .await;
+    assert!(empty["records"].as_array().unwrap().is_empty());
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_sluice"))
+        .env("SLUICE_HOME", f.home.path())
+        .env("SLUICE_ME", "@peer")
+        .env("TOKIO_WORKER_THREADS", "2")
+        .env_remove("SLUICE_RUN_ID")
+        .env_remove("SLUICE_PROJECT_ID")
+        .env_remove("SLUICE_STEP")
+        .args(["next", "--all", "--timeout", "0"])
+        .output()
+        .await
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        text.contains("[id:") && text.contains("after kill"),
+        "{text}"
+    );
+    f.close().await;
+}

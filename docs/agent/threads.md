@@ -103,15 +103,19 @@ on its name. From a shell:
 
 ```sh
 export SLUICE_ME=@lash-f4
-sluice tool subscription_set --name lanes --project lash \
+sluice tool subscription_set --name lanes \
   --wake ask,reply,failed,stale,settled,limit,quota,say-to-me --digest 30m
 sluice next --subscription lanes --timeout 3600
 ```
 
 Call `next --subscription lanes` again after acting on each batch; after a compaction or
-client restart, use that same name. Its projects, identity, filter and cursor are stored by
-the coordinator; no grep, cursor file or watcher rebuild is needed. With MCP, use
-`subscription_set(name="lanes", projects=["lash"], me="@lash-f4", wake=["ask", "reply",
+client restart, use that same name. Leaving projects out follows every project where you
+own a unit, are the fallback, or receive a message or question. A newly addressed project
+joins a wait already in progress. Each project has its own durable cursor, so restarting
+resumes with no lost or repeated records. Every returned record names its project, and
+ready records from several projects arrive together. To restrict a subscription, give
+`projects=["lash"]` (CLI: `--project lash`). With MCP, use
+`subscription_set(name="lanes", me="@lash-f4", wake=["ask", "reply",
 "failed", "stale", "settled", "limit", "quota", "say-to-me"], digest="30m")`, then
 `next(subscription="lanes", timeout=3600)`.
 
@@ -129,9 +133,13 @@ digest counting suppressed events by kind. `--json` gives record lines plus
 of suppressed events; asks never wait for that timer. Without a digest interval, counts ride
 with the next matching event or timeout. `subscription_get(name)`, `subscription_list()` and
 `subscription_remove(name)` inspect and remove subscriptions. Setting an existing name
-updates its filter without rewinding its cursor; only creation starts from now. Use one
-reader per name. If the bounded log was trimmed while it was away, `cursor_expired` asks you
-to remove and recreate the subscription to start from now.
+updates its filter without rewinding its cursors; creation starts from now, including the
+boundary used when another project joins later. Use one reader per name. If the bounded log
+was trimmed while it was away, `cursor_expired` asks you to remove and recreate the
+subscription to start from now.
+
+A CLI waiter exits when its parent or stdout's pipe reader goes away. Killing a waiter
+releases its connection; the replacement can resume the same subscription immediately.
 
 **Other waits.** Unstored `next` still supports `scope="all"`, `units=["pe-*"]` and
 `tags=["arc:x"]`, and `log_wait` takes the same `me`, `scope`, `units` and `tags`. Each named
@@ -252,8 +260,11 @@ needed a reply, else a note).
   input) does not return for a note or a reply; they come back with the next question or
   record that does wake it, or when `timeout` passes, so nothing is lost and nothing wakes
   you early.
-- `next(projects, since_seq?)` waits on your behalf across projects (all live projects when
-  `projects` is empty), in your scope (above): it wakes on a question to you, on a reply that
+- `next(projects=[], since_seq?)` waits across projects in your scope (above). With your
+  name and no projects, it follows every project that addresses you, including new inboxes
+  discovered during the wait. From the CLI use `SLUICE_ME=@lash-f4 sluice next --all`.
+  It returns the first nonempty batch, combining ready records from several projects and
+  naming the project in every entry. Explicit projects keep their settle window. It wakes on a question to you, on a reply that
   answers a question, not written by you, on a step that failed, turned stale or was skipped,
   on a unit that settled, on a project paused or archived by someone else, on a new
   fallback, and on a non-routine execution-limit notice to you: a `say` from `sluice` whose
@@ -268,7 +279,8 @@ needed a reply, else a note).
   It returns `{records, notes, last_seq, timed_out}`. With your name (`me`, or your session's
   binding, or `SLUICE_ME` for `sluice next`) it wakes on questions to you; without one, or with
   `scope="all"`, on a question to any session. Without `since_seq` it resumes after your last
-  batch (unnamed: from now). Each wait (and each `log_wait`) also marks you as reading, which
+  batch separately in each project (unnamed: from now). A newly addressed project's retained
+  unread records join the next batch. Each wait (and each `log_wait`) also marks you as reading, which
   senders' receipts and `unit_claim` reflect.
 
 In a plan, the fns `message.ask`, `message.say` and `message.reply` take the tools'

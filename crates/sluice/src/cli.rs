@@ -110,6 +110,7 @@ pub enum Mode {
         settle: u64,
         #[arg(long, default_value_t = 120, value_name = "S")]
         settle_max: u64,
+        /// Wait across all projects that address this session. With -p, wake on every record.
         #[arg(long)]
         all: bool,
         #[arg(long, default_value = "short", value_parser = ["short", "full", "none"])]
@@ -276,7 +277,8 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                 cut,
                 json,
             } => {
-                next(
+                tokio::select! {
+                    result = next(
                     &home,
                     NextFlags {
                         include_routine,
@@ -296,8 +298,9 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
                         cut,
                         json,
                     },
-                )
-                .await
+                ) => result,
+                    result = sluice_process::identity::wait_client_gone() => result.map_err(storage),
+                }
             }
             Mode::Watch {
                 project,
@@ -857,6 +860,7 @@ async fn normalize_args(
             }
         }
         "subscription_set" => {
+            args.entry("projects").or_insert(json!([]));
             listify(args, "projects");
             if let Some(value) = args.get_mut("wake")
                 && let Some(text) = value.as_str()
@@ -1642,7 +1646,11 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
                 println!("{value}");
             } else {
                 println!(
-                    "{}",
+                    "[{}] {}",
+                    record
+                        .project
+                        .map(|p| format!("id:{p}"))
+                        .unwrap_or_else(|| "home".into()),
                     watch::line(record, Settles::Full, flags.cut, &cancels)?.replace('\n', " ")
                 );
             }
@@ -1669,6 +1677,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
         std::io::stdout().flush().map_err(storage)?;
         return Ok(());
     }
+    let dynamic = flags.projects.is_empty();
     let projects = selectors(&flags.projects)?;
     let since = match (&flags.cursor, flags.since_seq) {
         (Some(path), _) => watch::load_cursor(path)?,
@@ -1682,46 +1691,25 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
     // batch (its own position, kept by the coordinator).
     let me = cli_me(flags.me.as_deref())?.map(|me| me.to_string());
     let reads = reads(home)?;
-    let selected = {
-        let wanted = projects.clone();
-        reads
-            .snapshot(move |sql| {
-                let ids: Vec<ProjectId> = if wanted.is_empty() {
-                    let mut stmt = sql.prepare(
-                        "SELECT project_id FROM projects WHERE deleted_at IS NULL AND archived=0 ORDER BY name",
-                    )?;
-                    let rows = stmt
-                        .query_map([], |r| r.get::<_, String>(0))?
-                        .collect::<Result<Vec<_>, _>>()?;
-                    rows.iter()
-                        .map(|id| {
-                            id.parse::<ProjectId>()
-                                .map_err(|e| {
-                                    sluice_store::StoreError::from(bad_request(e.to_string()))
-                                })
-                        })
-                        .collect::<Result<Vec<_>, _>>()?
-                } else {
-                    wanted
-                        .iter()
-                        .map(|s| sluice_store::messages::resolve_project(sql, s))
-                        .collect::<Result<Vec<_>, _>>()?
-                };
-                let mut top = RecordSeq(0);
-                for id in &ids {
-                    top = RecordSeq(top.0.max(records::bounds(sql, Some(*id))?.1.0));
-                }
-                Ok((ids, top))
-            })
-            .await
-            .map_err(|e| e.into_public(true))?
-    };
-    let (ids, top) = selected;
-    if ids.is_empty() && projects.is_empty() {
-        return Err(bad_request(
-            "no projects (none not archived); pass -p to name them",
-        ));
-    }
+    let wanted = projects.clone();
+    let top = reads
+        .snapshot(move |sql| {
+            if wanted.is_empty() {
+                return Ok(RecordSeq(sql.query_row(
+                    "SELECT coalesce(max(seq),0) FROM records WHERE project_id IS NOT NULL",
+                    [],
+                    |r| r.get(0),
+                )?));
+            }
+            let mut top = RecordSeq(0);
+            for selector in wanted {
+                let id = sluice_store::messages::resolve_project(sql, &selector)?;
+                top.0 = top.0.max(records::bounds(sql, Some(id))?.1.0);
+            }
+            Ok(top)
+        })
+        .await
+        .map_err(|e| e.into_public(true))?;
     let since_seq = since.or((me.is_none()).then_some(top));
     let settles = match flags.settles.as_str() {
         "short" => Settles::Short,
@@ -1745,7 +1733,7 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
         units: list(flags.units),
         tags: list(flags.tags),
         timeout_seconds: flags.timeout.min(3600),
-        all: flags.all,
+        all: flags.all && !dynamic,
         settle_seconds: flags.settle,
         settle_max_seconds: flags.settle_max.min(3600),
         settles: settles.clone(),
@@ -1766,7 +1754,31 @@ async fn next(home: &Path, flags: NextFlags) -> Result<(), PublicError> {
             .await
             .map_err(|e| e.into_public(true))?
     };
-    let out = watch::render(&result, settles, flags.cut, flags.json, &cancels)?;
+    let out = watch::render(&result, settles.clone(), flags.cut, flags.json, &cancels)?;
+    let out = if dynamic && !flags.json {
+        let mut labeled = String::new();
+        for record in watch::messages_first(&result) {
+            use std::fmt::Write;
+            writeln!(
+                labeled,
+                "[{}] {}",
+                record
+                    .project
+                    .map(|p| format!("id:{p}"))
+                    .unwrap_or_else(|| "home".into()),
+                watch::line(record, settles.clone(), flags.cut, &cancels)?
+            )
+            .map_err(storage)?;
+        }
+        labeled.push_str(&format!(
+            "{}seq {}\n",
+            if result.timed_out { "timeout " } else { "" },
+            result.last_seq.0
+        ));
+        labeled
+    } else {
+        out
+    };
     print!("{out}");
     std::io::stdout().flush().map_err(storage)?;
     Ok(())

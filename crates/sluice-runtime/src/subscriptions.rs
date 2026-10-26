@@ -30,6 +30,10 @@ struct Stored {
     digest: Option<String>,
     me: String,
     cursor: RecordSeq,
+    #[serde(default)]
+    cursors: BTreeMap<ProjectId, RecordSeq>,
+    #[serde(default)]
+    start_seq: Option<RecordSeq>,
     revision: RunId,
 }
 fn bad(message: impl Into<String>) -> PublicError {
@@ -90,13 +94,9 @@ fn interval(value: &str) -> Result<Duration, PublicError> {
         .ok_or_else(|| bad("digest must be a positive duration up to 365d (e.g. 30m, 10s, 1h)"))
 }
 pub async fn set(writer: &Writer, request: SubscriptionSet) -> Result<Value, PublicError> {
-    if request.name.trim().is_empty()
-        || request.name.len() > 128
-        || request.projects.is_empty()
-        || request.wake.is_empty()
-    {
+    if request.name.trim().is_empty() || request.name.len() > 128 || request.wake.is_empty() {
         return Err(bad(
-            "subscription needs a name (1..128 bytes), projects and wake kinds",
+            "subscription needs a name (1..128 bytes) and wake kinds",
         ));
     }
     let me = SessionName::parse(&request.me)?;
@@ -111,7 +111,12 @@ pub async fn set(writer: &Writer, request: SubscriptionSet) -> Result<Value, Pub
                 .map(|_| load(&state, &request.name))
                 .transpose()?;
             let mut projects = vec![];
-            let mut top = RecordSeq(0);
+            let mut top = RecordSeq(tx.sql().query_row(
+                "SELECT coalesce(max(seq),0) FROM records",
+                [],
+                |r| r.get(0),
+            )?);
+            let dynamic = request.projects.is_empty();
             for selector in request.projects {
                 let p = messages::resolve_project(tx.sql(), &selector)?;
                 if !projects.contains(&p) {
@@ -120,7 +125,29 @@ pub async fn set(writer: &Writer, request: SubscriptionSet) -> Result<Value, Pub
                 top.0 = top.0.max(records::bounds(tx.sql(), Some(p))?.1.0);
                 identities::register(tx, p, &me)?;
             }
+            let selected = if dynamic {
+                crate::watch::addressed_projects(tx.sql(), Some(me.as_str()))?
+            } else {
+                projects.clone()
+            };
+            let mut cursors = previous
+                .as_ref()
+                .map(|s| s.cursors.clone())
+                .unwrap_or_default();
+            for project in selected {
+                cursors.entry(project).or_insert(
+                    previous
+                        .as_ref()
+                        .map_or(top, |s| s.start_seq.unwrap_or(s.cursor)),
+                );
+            }
             let stored = Stored {
+                cursors,
+                start_seq: Some(
+                    previous
+                        .as_ref()
+                        .map_or(top, |s| s.start_seq.unwrap_or(s.cursor)),
+                ),
                 include_routine: request.include_routine,
                 name: request.name,
                 projects,
@@ -269,11 +296,14 @@ pub async fn next(
     let gone = crate::coordinator::request_disconnected();
     let s: Stored =
         serde_json::from_value(get(reads, name).await?).map_err(|e| bad(e.to_string()))?;
-    let mut keys: Vec<_> = s
-        .projects
-        .iter()
-        .map(|p| ChangeKey::new(Some(*p), "log"))
-        .collect();
+    let mut keys = if s.projects.is_empty() {
+        vec![ChangeKey::new(None, "log")]
+    } else {
+        s.projects
+            .iter()
+            .map(|p| ChangeKey::new(Some(*p), "log"))
+            .collect()
+    };
     keys.push(ChangeKey::new(None, "subscriptions"));
     let mut changes = reads.subscribe(writer, keys).await.map_err(public)?;
     let mut result = NextResult {
@@ -283,6 +313,7 @@ pub async fn next(
         timed_out: false,
         suppressed: Some(BTreeMap::new()),
     };
+    let mut cursors = s.cursors.clone();
     let deadline = clock.now() + timeout;
     let digest = s.digest.as_deref().map(interval).transpose()?;
     let mut digest_at = None;
@@ -297,7 +328,12 @@ pub async fn next(
             writer
                 .write(RetrySafety::Idempotent, move |tx| {
                     let me = SessionName::parse(&selected.me)?;
-                    for project in selected.projects {
+                    let projects = if selected.projects.is_empty() {
+                        crate::watch::addressed_projects(tx.sql(), Some(&selected.me))?
+                    } else {
+                        selected.projects
+                    };
+                    for project in projects {
                         identities::beat(tx, project, &me)?;
                     }
                     Ok(())
@@ -306,17 +342,28 @@ pub async fn next(
             heartbeat = clock.now() + Duration::from_secs(30);
         }
         let selected = s.clone();
-        let cursor = result.last_seq;
-        let (matching, suppressed, top) = reads
+        let mut positions = cursors.clone();
+        let (matching, suppressed, top, positions) = reads
             .snapshot(move |sql| {
                 if load(&settings(sql)?, &selected.name)? != selected {
                     return Err(conflict().into());
                 }
                 let mut matching = vec![];
                 let mut suppressed = BTreeMap::<String, u64>::new();
-                let mut top = cursor;
-                for project in &selected.projects {
-                    let mut after = cursor;
+                let mut top = positions
+                    .values()
+                    .copied()
+                    .max_by_key(|s| s.0)
+                    .unwrap_or(selected.cursor);
+                let projects = if selected.projects.is_empty() {
+                    crate::watch::addressed_projects(sql, Some(&selected.me))?
+                } else {
+                    selected.projects.clone()
+                };
+                for project in &projects {
+                    let mut after = *positions
+                        .entry(*project)
+                        .or_insert(selected.start_seq.unwrap_or(selected.cursor));
                     loop {
                         let page = records::read_records(
                             sql,
@@ -344,6 +391,7 @@ pub async fn next(
                                 *suppressed.entry(kind(&record)).or_default() += 1;
                             }
                         }
+                        positions.insert(*project, page.last_seq);
                         top.0 = top.0.max(page.last_seq.0);
                         if !full {
                             break;
@@ -352,10 +400,11 @@ pub async fn next(
                     }
                 }
                 matching.sort_by_key(|r| r.seq.0);
-                Ok((matching, suppressed, top))
+                Ok((matching, suppressed, top, positions))
             })
             .await
             .map_err(public)?;
+        cursors = positions;
         result.records.extend(matching);
         let counts = result.suppressed.as_mut().expect("subscription digest");
         for (kind, count) in suppressed {
@@ -369,6 +418,7 @@ pub async fn next(
             result.timed_out = result.records.is_empty() && now >= deadline;
             let selected = s.clone();
             let gone = gone.clone();
+            let positions = cursors.clone();
             writer
                 .write(RetrySafety::NonIdempotent, move |tx| {
                     if gone.is_cancelled() {
@@ -380,6 +430,11 @@ pub async fn next(
                     }
                     let mut updated = selected;
                     updated.cursor = top;
+                    updated.cursors = positions;
+                    let me = SessionName::parse(&updated.me)?;
+                    for project in updated.cursors.keys() {
+                        identities::beat(tx, *project, &me)?;
+                    }
                     updated.revision = RunId::new();
                     state["subscriptions"][&updated.name] = serde_json::to_value(&updated)?;
                     save(tx.sql(), &state)?;

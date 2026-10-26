@@ -1251,3 +1251,186 @@ async fn subscription_wake_kinds_select_typed_events() {
     }
     w.shutdown().await.unwrap();
 }
+
+/// Previously a wait froze its project list and never heard the first message in B.
+/// Independent cursors also prevent replaying A when B's cursor trails it.
+#[tokio::test]
+async fn all_projects_discover_an_inbox_and_resume_each_project() {
+    let (_h, w, r, a) = setup().await;
+    let b = ProjectId::new();
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute(
+            "UPDATE projects SET fallback='@lead' WHERE project_id=?1",
+            [a.to_string()],
+        )?;
+        tx.sql().execute(
+            "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'b','now')",
+            [b.to_string()],
+        )?;
+        tx.changed(Some(b), "projects");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    let options = NextOptions {
+        me: Some("@lead".into()),
+        timeout: Some(Duration::from_secs(3600)),
+        ..NextOptions::default()
+    };
+    let clock = ManualClock::new();
+    let wait = next(
+        &w,
+        &r,
+        NextOptions {
+            clock: Clock::Manual(clock.clone()),
+            ..options.clone()
+        },
+    );
+    tokio::pin!(wait);
+    tokio::select! {
+        result = &mut wait => panic!("wait returned before B addressed us: {result:?}"),
+        _ = clock.parked() => {}
+    }
+    stored(
+        &w,
+        b,
+        Stored {
+            from: "@worker",
+            to: Some("@lead"),
+            body: "first B",
+            question: true,
+            ..Stored::default()
+        },
+    )
+    .await;
+    let first = wait.await.unwrap();
+    assert_eq!(first.records.len(), 1);
+    assert_eq!(first.records[0].project, Some(b));
+    for (project, body) in [(a, "A together"), (b, "B together")] {
+        stored(
+            &w,
+            project,
+            Stored {
+                from: "@worker",
+                to: Some("@lead"),
+                body,
+                question: true,
+                ..Stored::default()
+            },
+        )
+        .await;
+    }
+    let both = next(&w, &r, options.clone()).await.unwrap();
+    assert_eq!(
+        both.records.iter().map(|r| r.project).collect::<Vec<_>>(),
+        vec![Some(a), Some(b)]
+    );
+    let empty = next(
+        &w,
+        &r,
+        NextOptions {
+            timeout: Some(Duration::ZERO),
+            ..options
+        },
+    )
+    .await
+    .unwrap();
+    assert!(empty.timed_out);
+    assert!(empty.records.is_empty());
+    w.shutdown().await.unwrap();
+}
+
+/// Stored all-project subscriptions used to require a static nonempty list. A new
+/// inbox must join a sleeping wait, and durable project cursors must survive reopen.
+#[tokio::test]
+async fn all_project_subscription_discovers_projects_and_survives_restart() {
+    use sluice_model::commands::{StepSays, SubscriptionSet, SubscriptionWake};
+    use sluice_runtime::subscriptions;
+    let (h, w, r, a) = setup().await;
+    subscriptions::set(
+        &w,
+        SubscriptionSet {
+            name: "all".into(),
+            projects: vec![],
+            me: "@lead".into(),
+            wake: vec![SubscriptionWake::Ask],
+            include_routine: false,
+            say_from_steps: StepSays::All,
+            digest: None,
+        },
+    )
+    .await
+    .unwrap();
+    let clock = ManualClock::new();
+    let wait = subscriptions::next(
+        &w,
+        &r,
+        "all".into(),
+        Duration::from_secs(3600),
+        Clock::Manual(clock.clone()),
+        None,
+    );
+    tokio::pin!(wait);
+    tokio::select! {
+        result = &mut wait => panic!("subscription returned without work: {result:?}"),
+        _ = clock.parked() => {}
+    }
+    let b = ProjectId::new();
+    w.write(RetrySafety::NonIdempotent, move |tx| {
+        tx.sql().execute(
+            "INSERT INTO projects(project_id,name,created_at) VALUES (?1,'b','now')",
+            [b.to_string()],
+        )?;
+        tx.changed(Some(b), "projects");
+        Ok(())
+    })
+    .await
+    .unwrap();
+    stored(
+        &w,
+        b,
+        Stored {
+            from: "@worker",
+            to: Some("@lead"),
+            body: "new inbox",
+            question: true,
+            ..Stored::default()
+        },
+    )
+    .await;
+    let first = wait.await.unwrap();
+    assert_eq!(first.records.len(), 1);
+    assert_eq!(first.records[0].project, Some(b));
+    w.shutdown().await.unwrap();
+    let w = Writer::open(&h.0).unwrap();
+    let r = ReadPool::open(&h.0, 2).unwrap();
+    for (project, body) in [(a, "A after restart"), (b, "B after restart")] {
+        stored(
+            &w,
+            project,
+            Stored {
+                from: "@worker",
+                to: Some("@lead"),
+                body,
+                question: true,
+                ..Stored::default()
+            },
+        )
+        .await;
+    }
+    let both = subscriptions::next(&w, &r, "all".into(), Duration::ZERO, Clock::default(), None)
+        .await
+        .unwrap();
+    assert_eq!(
+        both.records.iter().map(|r| r.project).collect::<Vec<_>>(),
+        vec![Some(a), Some(b)]
+    );
+    let stored = subscriptions::get(&r, "all".into()).await.unwrap();
+    assert_eq!(stored["cursors"].as_object().unwrap().len(), 2);
+    let empty = subscriptions::next(&w, &r, "all".into(), Duration::ZERO, Clock::default(), None)
+        .await
+        .unwrap();
+    assert!(empty.timed_out);
+    assert!(empty.records.is_empty());
+    w.shutdown().await.unwrap();
+}

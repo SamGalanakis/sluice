@@ -832,13 +832,15 @@ pub struct StepWaitResult {
     pub seq: RecordSeq,
 }
 
-/// Durable named event filters. Names belong to the home; projects are resolved at set time.
+/// Durable named event filters. Explicit projects resolve at set time; an empty list
+/// follows projects addressing the reader, with a durable cursor for each.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionSet {
     #[serde(default)]
     pub include_routine: bool,
     pub name: String,
+    #[serde(default)]
     pub projects: Vec<ProjectSelector>,
     pub wake: Vec<SubscriptionWake>,
     #[serde(default)]
@@ -877,6 +879,7 @@ pub struct Next {
     pub include_routine: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subscription: Option<String>,
+    #[serde(default)]
     pub projects: Vec<ProjectSelector>,
     /// Records after this seq. Left out, a named session resumes after the last batch it was
     /// given (its own cursor) and an unnamed one starts at the top of the logs.

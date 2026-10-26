@@ -158,3 +158,38 @@ fn open_pidfd(pid: Pid) -> io::Result<OwnedFd> {
 }
 
 pub use rustix::process::Signal;
+
+/// Wait without timers for a CLI's caller to disappear. A pipe's write end reports
+/// ERROR when its last reader closes, even while the CLI has nothing to print.
+/// Regular files and terminals cannot be monitored with epoll and need no pipe guard.
+pub async fn wait_client_gone() -> io::Result<()> {
+    use tokio::io::{Interest, unix::AsyncFd};
+    let parent = rustix::process::getppid();
+    let Some(pid) = parent else {
+        return Ok(());
+    };
+    let parent_fd = match pidfd_open(pid, PidfdFlags::empty()) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::SRCH) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let parent_fd = AsyncFd::new(parent_fd)?;
+    if rustix::process::getppid() != parent {
+        return Ok(());
+    }
+    let output = match AsyncFd::with_interest(rustix::stdio::stdout(), Interest::ERROR) {
+        Ok(fd) => Some(fd),
+        Err(error) if error.raw_os_error() == Some(rustix::io::Errno::PERM.raw_os_error()) => None,
+        Err(error) => return Err(error),
+    };
+    tokio::select! {
+        result = parent_fd.readable() => { let _ = result?; }
+        result = async {
+            match output {
+                Some(fd) => { let _ = fd.ready(Interest::ERROR).await?; Ok::<_, io::Error>(()) }
+                None => std::future::pending().await,
+            }
+        } => { result?; }
+    }
+    Ok(())
+}

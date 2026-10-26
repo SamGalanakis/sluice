@@ -1953,13 +1953,21 @@ each (`steps: no step x`, `tags: no step is tagged t`, `until.any_of[1]: …`); 
 removed from the plan during the wait ends it with the same error.
 
 `next(projects=[], since_seq?, me?, scope?, units?, tags?, include_routine=false, timeout=300, all=false, settle=20,
-settle_max=120, settles="short")` waits across projects (all live projects when empty) for what
-an orchestrator acts on, in its scope (§8.1, "What a session sees": a named session's own units
-and messages by default), and returns `{records, notes, last_seq, timed_out}`. Without
-`since_seq` a named session resumes after its last batch: the earliest of its `readers`
-positions in the selected projects (a position the log no longer reaches, or none yet, starts at
-the top of the logs); an unnamed caller starts at the top. Each session keeps its own position,
-so sessions never share or move one cursor. It wakes on:
+settle_max=120, settles="short")` waits for what an orchestrator acts on in its scope (§8.1).
+Without projects, a named session watches every project where it owns a unit, is the
+fallback, or has an addressed message or question. This set is discovered again on log
+changes: the first message in another project joins an already waiting call. An unnamed
+caller watches all live projects. The first nonempty snapshot returns immediately, including
+records ready in several projects; each record carries its project ID. The CLI spelling is
+`sluice next --all` (with `-p`, `--all` retains its meaning of every record waking the wait).
+Explicit projects keep the per-project wait and settle windows below.
+
+The result is `{records, notes, last_seq, timed_out}`. Without `since_seq`, each named
+session resumes independently from its last returned cursor in each project, so a lagging
+project cannot replay another project's records. Newly addressed projects include their
+retained unread records; an unnamed caller starts now. Explicit projects with no position
+(or an expired position) start at their current log end. A supplied `since_seq` overrides
+these positions. Sessions do not share cursors. It wakes on:
 
 - a `unit.settled` record, written each time a unit comes to rest: it is settled (§6.7), and
   its steps, their generations or work generations, or their statuses differ from its last
@@ -1980,7 +1988,7 @@ so sessions never share or move one cursor. It wakes on:
 A step's progress (§6.4) writes no record, so it wakes none of these waits, `all` included.
 Notes addressed to the named reader wake immediately too. Other notes are held and returned
 in `notes`. Check notes always wake their addressee, including a stored subscription whose
-wake list omits notes. After the first waking record it keeps collecting until
+wake list omits notes. With explicit projects, after the first waking record it keeps collecting until
 `settle` seconds pass with nothing new, or `settle_max` seconds after the first. Messages come
 first in `records`. `settles` sets how much of a settled unit's step outputs are carried:
 `short` (booleans, numbers, strings up to 80 characters and a `summary`'s first line; the rest
@@ -2004,14 +2012,17 @@ without changing it. Suppressed routine events count in the subscription digest.
 
 ### Stored subscriptions
 
-`subscription_set(name, projects, wake, me, say_from_steps="asks-only", include_routine=false, digest?)` stores a
-home-wide named subscription. `projects` is a nonempty list of project selectors, resolved
-once to immutable IDs; `me` is a session name and its existing `mine` ownership scope (§8.1)
-applies. `wake` is a nonempty list of `ask`, `reply`, `failed`, `stale`, `settled`, `limit`,
+`subscription_set(name, projects=[], wake, me, say_from_steps="asks-only", include_routine=false, digest?)` stores a
+home-wide named subscription. Explicit `projects` selectors resolve once to immutable IDs.
+Omitting projects (or `[]`) follows every project that addresses `me`, using the same dynamic
+selection as ordinary `next`; new projects join without another `subscription_set`.
+`me` is a session name and its existing `mine` ownership scope (§8.1) applies. `wake` is a nonempty list of `ask`, `reply`, `failed`, `stale`, `settled`, `limit`,
 `quota` and `say-to-me`. Names are nonblank and at most 128 bytes. Creation starts at the
 selected logs' current end; setting an existing name replaces the filter and reader while
-preserving its cursor. `subscription_get(name)` returns its stored filter, reader, projects,
-cursor and revision token; `subscription_list()` lists them by name; `subscription_remove(name)`
+preserving its cursors. A durable `cursors` map holds each project's position; new projects
+start at the subscription's creation boundary. The legacy `cursor` is the highest consumed
+seq for display and compatibility. `subscription_get(name)` returns its stored filter,
+reader, projects, cursors and revision token; `subscription_list()` lists them by name; `subscription_remove(name)`
 removes one (a missing name succeeds). These are coordinator tools on CLI and MCP. The CLI
 accepts repeated `--project` and comma-separated `--wake` for `subscription_set`.
 
@@ -2330,7 +2341,7 @@ on.
 | `log_wait` | as `log_read`, plus `timeout=300`, `wake="any"`, `me?`, `scope?`, `units?`, `tags?` | `{records, last_seq}` (§10) |
 | `step_wait` | `project`, `steps?` or `tags?`, `until`, `timeout=300` | `{met, steps, seq}` (§10) |
 | `next` | §10; `subscription?` resumes a stored filter | `{records, notes, last_seq, timed_out, suppressed?}` |
-| `subscription_set` | `name`, `projects`, `wake`, `me`, `say_from_steps="asks-only"`, `digest?` (§10) | stored filter, cursor and revision token |
+| `subscription_set` | `name`, `projects=[]`, `wake`, `me`, `say_from_steps="asks-only"`, `digest?` (§10) | stored filter, cursor and revision token |
 | `subscription_get` | `name` | stored subscription |
 | `subscription_list` | | subscriptions ordered by name |
 | `subscription_remove` | `name` | acknowledgement |
@@ -2930,7 +2941,7 @@ write that timed out, and connections dropped for want of a permit.
 | `tool lease acquire\|release\|status [<resource or id>] [--field value]…` | `lease_acquire`, `lease_release` or `lease_status` (§7.6), a leading bare word their `resource` (`lease` for release) |
 | `say`, `ask`, `reply` | aliases of `tool say`, `tool ask`, `tool reply`, with the same JSON, flags, files and run defaults |
 | `next --subscription NAME [--timeout 300] [--cut 600] [--json]` | stored wait (§10); one line per matching event and a digest with suppressed counts; resumes its cursor across clients |
-| `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
+| `next [-p P]… [--since-seq N \| --cursor FILE] [--me @NAME] [--scope mine\|all] [--units U,…] [--tags T,…] [--timeout 300] [--settle 20] [--settle-max 120] [--all] [--settles short\|full\|none] [--cut 600] [--json]` | the `next` wait; `--all` without `-p` follows every project that addresses you and labels each entry with its project; without a since a named session resumes after its last batch and an unnamed one starts at the top of the selected logs; `--cursor` reads and writes the seq in a file |
 | `watch [-p P] [--kinds K,…] [--threads T,…] [--since-seq N] [--wake any\|questions]` | follows the log, one JSON record per line, until killed |
 | `drain [-p P]… [--no-wait] [--release]` | drains (waits until drained unless `--no-wait`) or releases |
 | `me [--project P] [--step S] [--json]` | `step_context` for the current step (from `SLUICE_PROJECT_ID`/`SLUICE_PROJECT` and `SLUICE_STEP`) |
@@ -2941,6 +2952,10 @@ write that timed out, and connections dropped for want of a permit.
 | `mcp` | the MCP server over stdio (§12.1) |
 | `agent hook --engine codex\|claude\|devin --event E [--run R]` | engine hook entry (internal) |
 | `guardian`, `payload-exec` | internal |
+
+A CLI `next` exits promptly when its parent exits or stdout's last pipe reader closes,
+closing its pending coordinator request. Cancellation preserves unreturned subscription
+cursors; a killed waiter leaves no lock that obstructs its replacement.
 
 `sluice next` prints one entry per event: `ASK|SAY|REPLY #<message-id> <thread> <from> -> <to>:
 <title or body>` (a question's title leads, its body on the lines after, each indented two

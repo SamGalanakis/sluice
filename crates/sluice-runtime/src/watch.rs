@@ -15,7 +15,7 @@ use sluice_store::{
     ChangeKey, ReadPool, RetrySafety, WriteTransaction, Writer, identities, messages, plans,
     records::{self, RecordFilter, ScopeFilter},
 };
-use std::{path::Path, time::Duration};
+use std::{collections::BTreeMap, path::Path, time::Duration};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
@@ -350,43 +350,99 @@ pub enum Classification {
     Note,
     Ignore,
 }
-/// Parent questions live independently of the bounded record feed.
+/// Projects which currently give this session work, including an inbox in a project
+/// it has never visited. Registration alone is deliberately not a responsibility.
+pub(crate) fn addressed_projects(
+    sql: &rusqlite::Connection,
+    me: Option<&str>,
+) -> sluice_store::Result<Vec<ProjectId>> {
+    let mut stmt = sql.prepare(
+        "SELECT p.project_id FROM projects p WHERE p.deleted_at IS NULL AND (?1 IS NOT NULL OR p.archived=0)
+         AND (?1 IS NULL OR p.fallback=?1
+              OR EXISTS(SELECT 1 FROM steps s WHERE s.project_id=p.project_id AND s.owner=?1)
+              OR EXISTS(SELECT 1 FROM messages m WHERE m.project_id=p.project_id AND m.\"to\"=?1))
+         ORDER BY p.name",
+    )?;
+    let rows = stmt
+        .query_map([me], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    rows.into_iter().map(parse_id).collect()
+}
+
+type Positions = BTreeMap<ProjectId, RecordSeq>;
+type Batch = (Vec<(Record, Classification)>, Positions);
+
 async fn batch(
     reads: &ReadPool,
     options: &NextOptions,
-    cursor: RecordSeq,
-) -> Result<(Vec<(Record, Classification)>, RecordSeq), PublicError> {
+    mut cursors: BTreeMap<ProjectId, RecordSeq>,
+    dynamic: bool,
+    start: RecordSeq,
+) -> Result<Batch, PublicError> {
     let options = options.clone();
     let scope = options.scope_filter()?;
     let mine = scope.mine;
     reads
         .snapshot(move |sql| {
+            let projects = if dynamic {
+                addressed_projects(sql, options.me.as_deref())?
+            } else {
+                options.projects.clone()
+            };
             let mut gathered = vec![];
-            let mut top = cursor;
-            let mut fence = None::<i64>;
-            for project in &options.projects {
-                let page = records::read_records(
-                    sql,
-                    Some(*project),
-                    &RecordFilter {
-                        since: Some(cursor),
-                        limit: 200,
-                        kinds: options.kinds.clone(),
-                        threads: options.threads.clone(),
-                        scope: Some(scope.clone()),
-                        ..RecordFilter::default()
-                    },
-                )?
-                .into_page()?;
-                top = RecordSeq(top.0.max(page.last_seq.0));
-                if page.records.len() == 200 {
-                    fence = Some(fence.map_or(page.last_seq.0, |s| s.min(page.last_seq.0)));
+            for project in projects {
+                if let std::collections::btree_map::Entry::Vacant(entry) = cursors.entry(project) {
+                    let (earliest, latest) = records::bounds(sql, Some(project))?;
+                    let at = match &options.me {
+                        Some(me) if options.since_seq.is_none() => {
+                            identities::resume(sql, project, me)?
+                                .unwrap_or(RecordSeq(earliest.0.saturating_sub(1).max(0)))
+                        }
+                        _ => start,
+                    };
+                    let at = if options.since_seq.is_none()
+                        && matches!(
+                            records::read_records(
+                                sql,
+                                Some(project),
+                                &RecordFilter {
+                                    since: Some(at),
+                                    limit: 1,
+                                    ..RecordFilter::default()
+                                }
+                            )?,
+                            records::RecordRead::CursorExpired { .. }
+                        ) {
+                        latest
+                    } else {
+                        at
+                    };
+                    entry.insert(at);
                 }
-                gathered.extend(page.records);
-            }
-            if let Some(fence) = fence {
-                gathered.retain(|r| r.seq.0 <= fence);
-                top = RecordSeq(fence);
+                let cursor = cursors
+                    .get_mut(&project)
+                    .expect("project cursor initialized");
+                loop {
+                    let page = records::read_records(
+                        sql,
+                        Some(project),
+                        &RecordFilter {
+                            since: Some(*cursor),
+                            limit: 200,
+                            kinds: options.kinds.clone(),
+                            threads: options.threads.clone(),
+                            scope: Some(scope.clone()),
+                            ..RecordFilter::default()
+                        },
+                    )?
+                    .into_page()?;
+                    let full = page.records.len() == 200;
+                    *cursor = page.last_seq;
+                    gathered.extend(page.records);
+                    if !full {
+                        break;
+                    }
+                }
             }
             gathered.sort_by_key(|r| r.seq.0);
             let mut classified = vec![];
@@ -451,21 +507,10 @@ async fn batch(
                 };
                 classified.push((record, classification));
             }
-            Ok((classified, top))
+            Ok((classified, cursors))
         })
         .await
         .map_err(public)
-}
-async fn projects(
-    reads: &ReadPool,
-    selected: Vec<ProjectId>,
-) -> Result<Vec<ProjectId>, PublicError> {
-    reads.snapshot(move|sql|{
-        if !selected.is_empty(){let mut result=vec![];for p in selected{messages::resolve_project(sql,&ProjectSelector::Id(p))?;if !result.contains(&p){result.push(p);}}return Ok(result);}
-        let mut stmt=sql.prepare("SELECT project_id FROM projects WHERE deleted_at IS NULL AND archived=0 ORDER BY name")?;
-        let rows=stmt.query_map([],|r|r.get::<_,String>(0))?.collect::<Result<Vec<_>,_>>()?;
-        rows.into_iter().map(parse_id).collect()
-    }).await.map_err(public)
 }
 pub async fn next_command(
     writer: &Writer,
@@ -540,7 +585,7 @@ pub async fn next_command(
 pub async fn next(
     writer: &Writer,
     reads: &ReadPool,
-    mut options: NextOptions,
+    options: NextOptions,
 ) -> Result<NextResult, PublicError> {
     if options.me.as_deref().is_some_and(|me| me.trim().is_empty())
         || options.since_seq.is_some_and(|s| s.0 < 0)
@@ -551,53 +596,64 @@ pub async fn next(
         });
     }
     options.scope()?;
-    options.projects = projects(reads, options.projects).await?;
-    // Without a since: a named session resumes where its last batch ended (the earliest of
-    // its positions in the selected projects); an unnamed one, or a session's first wait,
-    // starts at the top of the logs.
-    let mut cursor = if let Some(seq) = options.since_seq {
-        seq
+    let dynamic = options.projects.is_empty();
+    let selected = options.projects.clone();
+    let me = options.me.clone();
+    let since = options.since_seq;
+    let (mut cursors, start_seq) = reads
+        .snapshot(move |sql| {
+            let mut cursors = BTreeMap::new();
+            let start = since.unwrap_or(RecordSeq(if dynamic && me.is_some() {
+                0
+            } else {
+                sql.query_row("SELECT coalesce(max(seq),0) FROM records", [], |r| r.get(0))?
+            }));
+            for project in selected {
+                messages::resolve_project(sql, &ProjectSelector::Id(project))?;
+                let top = records::bounds(sql, Some(project))?.1;
+                let at = since
+                    .or(me
+                        .as_deref()
+                        .map(|me| identities::resume(sql, project, me))
+                        .transpose()?
+                        .flatten())
+                    .unwrap_or(top);
+                let at = if since.is_none()
+                    && matches!(
+                        records::read_records(
+                            sql,
+                            Some(project),
+                            &RecordFilter {
+                                since: Some(at),
+                                limit: 1,
+                                ..RecordFilter::default()
+                            }
+                        )?,
+                        records::RecordRead::CursorExpired { .. }
+                    ) {
+                    top
+                } else {
+                    at
+                };
+                cursors.insert(project, at);
+            }
+            Ok((cursors, start))
+        })
+        .await
+        .map_err(public)?;
+    // A home log subscription observes both new projects and new responsibility in
+    // existing ones. Subscribe before discovery so the first addressed message cannot race.
+    let keys = if dynamic {
+        vec![ChangeKey::new(None, "log")]
     } else {
-        let selected = options.projects.clone();
-        let me = options.me.clone();
-        reads
-            .snapshot(move |sql| {
-                let mut top = RecordSeq(0);
-                let mut resumed: Option<RecordSeq> = None;
-                for p in selected {
-                    top = RecordSeq(top.0.max(records::bounds(sql, Some(p))?.1.0));
-                    // A position the log no longer reaches back to is dropped, not refused.
-                    if let Some(me) = &me
-                        && let Some(at) = identities::resume(sql, p, me)?
-                        && matches!(
-                            records::read_records(
-                                sql,
-                                Some(p),
-                                &RecordFilter {
-                                    since: Some(at),
-                                    limit: 1,
-                                    ..RecordFilter::default()
-                                },
-                            )?,
-                            records::RecordRead::Page(_)
-                        )
-                    {
-                        resumed = Some(resumed.map_or(at, |r| RecordSeq(r.0.min(at.0))));
-                    }
-                }
-                Ok(resumed.unwrap_or(top))
-            })
-            .await
-            .map_err(public)?
+        options
+            .projects
+            .iter()
+            .map(|p| ChangeKey::new(Some(*p), "log"))
+            .collect()
     };
-    // Cursor first; subscribe and recheck before waiting. Record reads below always
-    // follow subscription, including commits between the initial snapshot and subscribe.
-    let keys = options
-        .projects
-        .iter()
-        .map(|p| ChangeKey::new(Some(*p), "log"))
-        .collect();
     let mut subscription = reads.subscribe(writer, keys).await.map_err(public)?;
+    let gone = crate::coordinator::request_disconnected();
     let start = options.clock.now();
     let timeout = options.timeout.map(|t| start + t);
     let mut first = None;
@@ -607,22 +663,23 @@ pub async fn next(
         suppressed: None,
         records: vec![],
         notes: vec![],
-        last_seq: cursor,
+        last_seq: start_seq,
         timed_out: false,
     };
     loop {
-        if options.clock.now() >= heartbeat {
-            beat(writer, &options, cursor).await?;
-            heartbeat = options.clock.now() + Duration::from_secs(30);
-        }
         // Only expire against a snapshot begun at or after the deadline. Time
         // spent reading must not hide a wake committed while that read was pending.
         let now = options.clock.now();
-        let (batch, top) = batch(reads, &options, cursor).await?;
-        let mut consumed = 0;
+        let (batch, positions) =
+            batch(reads, &options, cursors.clone(), dynamic, start_seq).await?;
+        let previous = std::mem::replace(&mut cursors, positions);
+        if options.clock.now() >= heartbeat {
+            beat(writer, &options, &cursors, false).await?;
+            heartbeat = options.clock.now() + Duration::from_secs(30);
+        }
+
         for (record, classification) in batch {
-            consumed += 1;
-            cursor = record.seq;
+            let seq = record.seq;
             match classification {
                 Classification::Note => result.notes.push(record),
                 Classification::Wake => {
@@ -630,35 +687,42 @@ pub async fn next(
                     let now = options.clock.now();
                     first.get_or_insert(now);
                     last = Some(now);
-                    if options.settle.is_zero() {
-                        result.last_seq = cursor;
-                        beat(writer, &options, cursor).await?;
+                    if !dynamic && options.settle.is_zero() {
+                        for (project, at) in &mut cursors {
+                            at.0 =
+                                at.0.min(seq.0)
+                                    .max(previous.get(project).map_or(0, |s| s.0));
+                        }
+                        result.last_seq = seq;
+                        beat(writer, &options, &cursors, true).await?;
                         return Ok(result);
                     }
                 }
                 Classification::Ignore => {}
             }
         }
-        cursor = top;
-        result.last_seq = cursor;
+        result.last_seq = cursors
+            .values()
+            .copied()
+            .max_by_key(|s| s.0)
+            .unwrap_or(start_seq);
         let finish = first
             .zip(last)
             .map(|(f, l)| (f + options.settle_max).min(l + options.settle));
-        if finish.is_some_and(|d| now >= d) {
-            beat(writer, &options, cursor).await?;
+        if (dynamic && !result.records.is_empty())
+            || finish.is_some_and(|d| options.clock.now() >= d)
+        {
+            beat(writer, &options, &cursors, true).await?;
             return Ok(result);
         }
         if first.is_none() && timeout.is_some_and(|d| now >= d) {
             result.timed_out = true;
-            beat(writer, &options, cursor).await?;
+            beat(writer, &options, &cursors, true).await?;
             return Ok(result);
-        }
-        // Drain pagination before sleeping, without granting a fresh timeout budget.
-        if consumed >= 200 {
-            continue;
         }
         let deadline = finish.or(timeout).map_or(heartbeat, |d| d.min(heartbeat));
         tokio::select! {
+            _ = gone.cancelled() => return Err(PublicError::Cancelled { message: "next client disconnected; cursor retained".into() }),
             result = subscription.wait() => {
                 if let Err(e) = result {
                     return Err(public(e));
@@ -671,18 +735,24 @@ pub async fn next(
 async fn beat(
     writer: &Writer,
     options: &NextOptions,
-    cursor: RecordSeq,
+    cursors: &BTreeMap<ProjectId, RecordSeq>,
+    advance: bool,
 ) -> Result<(), PublicError> {
-    let projects = options.projects.clone();
+    let cursors = cursors.clone();
     let me = options
         .me
         .clone()
         .unwrap_or_else(|| messages::ANONYMOUS_READER.into());
     let threshold = options.unread_alert_min;
+    let gone = crate::coordinator::request_disconnected();
     let result=writer.write(RetrySafety::Idempotent,move|tx|{
-        for project in projects{
+        if advance && gone.is_cancelled() { return Err(PublicError::Cancelled { message: "next client disconnected; cursor retained".into() }.into()); }
+        for (project, cursor) in cursors{
             let live:bool=tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM projects WHERE project_id=?1 AND deleted_at IS NULL)",[project.to_string()],|r|r.get(0))?;
-            if live{messages::orchestrator_read(tx,project,&me,cursor,threshold)?;}
+            if live {
+                if advance { messages::orchestrator_read(tx,project,&me,cursor,threshold)?; }
+                else if let Ok(session) = sluice_model::identity::SessionName::parse(&me) { identities::beat(tx, project, &session)?; }
+            }
         }Ok(())
     }).await;
     match result {
