@@ -1,3 +1,6 @@
+> **Not currently maintained.** Development stopped on 2026-10-26; nothing here is being fixed
+> or deployed.
+
 # sluice
 
 sluice runs typed plans of functions for AI-agent work. An orchestrator, usually an agent
