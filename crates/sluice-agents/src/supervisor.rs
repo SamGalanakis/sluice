@@ -211,7 +211,7 @@ impl std::fmt::Display for AgentFailure {
         if let Some(session) = &self.session {
             write!(
                 f,
-                "\nsession: {session}. Bind the step's session input to it, then step_retry."
+                "\nsession: {session}. step_retry resumes it; pass fresh=true to start a new session."
             )?;
         }
         Ok(())
@@ -1346,15 +1346,7 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                 };
                 let metadata = match metadata_result {
                     Ok(metadata) => metadata,
-                    Err(error) if error.kind == FailureKind::MissingSession && machine.checkpoint.delivery.entries.iter().all(|entry| entry.tries == 0) => {
-                        clean(engine, host, &mut server, tmux, &context).await?;
-                        machine.checkpoint.notes.push(format!("{}; starting fresh", error.message));
-                        eprintln!("{}; starting fresh", error.message);
-                        machine.checkpoint.session = None;
-                        persist(&mut machine, &config, host).await?;
-                        continue;
-                    }
-                    Err(error) => return Err(error),
+                    Err(error) => return Err(failure(FailureKind::MissingSession, format!("cannot resume session {session}: {}", error.message))),
                 };
                 if let Some(metadata) = metadata {
                     if metadata.id.is_empty() { return Err(invalid("empty canonical session id")); }
@@ -1405,7 +1397,10 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
                             probe_delay = (probe_delay * 2).min(Duration::from_secs(30));
                             machine.boot_at = Duration::from_millis(clock_ms().map_err(invalid)?.saturating_sub(machine.checkpoint.started_ms));
                         }
-                        Err(error) => break Err(error.into()),
+                        Err(error) => break Err(match &command {
+                            EngineCommand::Resume { .. } if matches!(error.kind, EngineErrorKind::MissingSession | EngineErrorKind::Fatal) => failure(FailureKind::MissingSession, error.message),
+                            _ => error.into(),
+                        }),
                     }
                 }
             }.await;
@@ -1419,18 +1414,10 @@ pub async fn supervise<E: EngineAdapter, H: SupervisorHost>(
             }
             let mut startup_failure = None;
             if let Err(error) = startup {
-                let missing = error.message.clone();
-                // Only an explicit adapter missing-session error before any offer permits fallback.
-                // Preserve its typed kind through startup (the public kind maps this below).
-                if error.kind == FailureKind::MissingSession && machine.checkpoint.session.is_some() && machine.checkpoint.delivery.entries.iter().all(|entry| entry.tries == 0) {
-                    clean(engine, host, &mut server, tmux, &context).await?;
-                    machine.checkpoint.notes.push(format!("{missing}; starting fresh"));
-                    eprintln!("{missing}; starting fresh");
-                    machine.checkpoint.session = None;
-                    persist(&mut machine, &config, host).await?;
-                    continue;
-                }
-                startup_failure = Some(error);
+                startup_failure = Some(match &machine.checkpoint.session {
+                    Some(session) if matches!(error.kind, FailureKind::MissingSession | FailureKind::EngineExited) => failure(FailureKind::MissingSession, format!("cannot resume session {session}: {}", error.message)),
+                    _ => error,
+                });
             }
             if machine.checkpoint.internal_attempt > 1 && startup_failure.is_none() {
                 machine.checkpoint.delivery.enqueue(InputId::Continue { attempt: machine.checkpoint.internal_attempt }, resume_text(previous_failure.as_ref())).map_err(invalid)?;

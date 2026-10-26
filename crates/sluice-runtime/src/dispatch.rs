@@ -154,6 +154,35 @@ pub fn new_capability() -> sluice_model::rpc::RunCapability {
 
 pub struct Hooks;
 impl RetryMessages for Hooks {
+    fn recorded_session(
+        &self,
+        sql: &rusqlite::Connection,
+        run: &str,
+        inputs: Option<&sluice_model::rpc::JsonMap>,
+    ) -> sluice_store::Result<Option<String>> {
+        let Some(home) = sql.path().and_then(|p| std::path::Path::new(p).parent()) else {
+            return Ok(None);
+        };
+        let checkpoint = sluice_agents::supervisor::Checkpoint::read(&home.join("runs").join(run))?;
+        if let Some(checkpoint) = checkpoint {
+            let input = |name| {
+                inputs
+                    .and_then(|i| i.0.get(name))
+                    .and_then(|v| v.as_value().as_str())
+            };
+            let compatible = input("engine").is_none_or(|engine| engine == checkpoint.engine)
+                && input("cwd").is_none_or(|cwd| {
+                    std::fs::canonicalize(cwd).is_ok_and(|cwd| cwd == checkpoint.cwd)
+                });
+            return Ok(compatible.then_some(checkpoint.session).flatten());
+        }
+        // Older runs may have a result but no supervisor checkpoint.
+        Ok(sql.query_row(
+            "SELECT coalesce(json_extract(result,'$.error.session'),json_extract(result,'$.outputs.session')) FROM runs WHERE run_id=?1",
+            [run], |r| r.get(0),
+        )?)
+    }
+
     fn validate_retry(
         &self,
         tx: &WriteTransaction<'_>,

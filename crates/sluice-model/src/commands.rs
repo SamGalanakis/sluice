@@ -458,6 +458,9 @@ pub struct StepRetry {
     pub message: Option<String>,
     pub reason: Option<String>,
     pub author: Option<String>,
+    /// Start a new agent session; incompatible with a bound session input.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fresh: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -1067,6 +1070,18 @@ pub struct RetryResult {
     pub steps: Vec<StepId>,
     pub rearmed: Vec<StepId>,
     pub stopped_at: Vec<StepId>,
+    /// One choice per retried step/item; null session means a fresh start.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sessions: Vec<RetrySession>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RetrySession {
+    pub step: StepId,
+    /// -1 for an unscattered step.
+    pub item_index: i64,
+    pub session: Option<String>,
 }
 
 /// A prune candidate kept by a surviving reference or a keep pattern.

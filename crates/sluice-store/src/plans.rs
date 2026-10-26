@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::{Value, json};
 use sluice_model::cost::{self, Counter};
 use sluice_model::{
-    commands::{ProjectIdentity, RetryResult, StepSelection, StepStatus},
+    commands::{ProjectIdentity, RetryResult, RetrySession, StepSelection, StepStatus},
     error::PublicError,
     events::Event,
     gates::{self, GateDecision, StateSnapshot, StepState},
@@ -118,6 +118,19 @@ fn current_prune_result(
 /// Validation checks all semantic preconditions without writes. After it succeeds,
 /// post_retry may report storage failures only; the writer then rolls back.
 pub trait RetryMessages {
+    /// Session recorded by the agent supervisor, including a run killed before its result.
+    fn recorded_session(
+        &self,
+        sql: &Connection,
+        run: &str,
+        _inputs: Option<&JsonMap>,
+    ) -> Result<Option<String>> {
+        Ok(sql.query_row(
+            "SELECT coalesce(json_extract(result,'$.error.session'),json_extract(result,'$.outputs.session')) FROM runs WHERE run_id=?1",
+            [run], |r| r.get(0),
+        )?)
+    }
+
     fn validate_retry(
         &self,
         tx: &WriteTransaction<'_>,
@@ -740,28 +753,35 @@ pub fn step_retry(
     check_context(tx, context)?;
     check_selector(tx.sql(), context.project, &request.project)?;
     let selected = select(context, &request.selection)?;
+    if request.fresh {
+        for id in &selected {
+            if context.plan.steps()[id].bindings.contains_key("session") {
+                return Err(invalid(format!(
+                    "step {id}: fresh cannot be combined with a bound session"
+                )));
+            }
+        }
+    }
     let parks = crate::resources::parked_steps(tx.sql(), context.project)?;
     let (wake, retry): (Vec<_>, Vec<_>) = selected
         .into_iter()
         .partition(|id| request.message.is_some() && parks.contains_key(id));
     let author = request.author.as_deref().unwrap_or_default();
+    if request.fresh && !wake.is_empty() {
+        return Err(invalid(
+            "fresh cannot replace a parked run; cancel it before retrying",
+        ));
+    }
     let mut result = if retry.is_empty() && !wake.is_empty() {
         RetryResult {
             project: identity(tx.sql(), context.project)?,
             steps: vec![],
             rearmed: vec![],
             stopped_at: vec![],
+            sessions: vec![],
         }
     } else {
-        retry_selected(
-            tx,
-            context,
-            &retry,
-            request.message.as_deref(),
-            author,
-            request.reason.as_deref().unwrap_or_default(),
-            messages,
-        )?
+        retry_selected(tx, context, &retry, &request, messages)?
     };
     if let Some(body) = request.message.as_deref().filter(|_| !wake.is_empty()) {
         validate_message(body)?;
@@ -773,17 +793,198 @@ pub fn step_retry(
     }
     Ok(result)
 }
-pub(crate) fn retry_selected(
+fn retry_selected(
     tx: &mut WriteTransaction<'_>,
     context: &PlanContext,
     selected: &[StepId],
-    message: Option<&str>,
-    author: &str,
-    reason: &str,
+    request: &sluice_model::commands::StepRetry,
     messages: &mut impl RetryMessages,
 ) -> Result<RetryResult> {
+    let message = request.message.as_deref();
+    let author = request.author.as_deref().unwrap_or_default();
+    let reason = request.reason.as_deref().unwrap_or_default();
     let walk = prepare_retry(tx, context, selected, message, author, messages)?;
-    apply_retry(tx, context, walk, message, author, reason, messages)
+    let sessions = retry_sessions(
+        tx,
+        context,
+        &walk,
+        message.is_some(),
+        request.fresh,
+        messages,
+    )?;
+    let mut result = apply_retry(tx, context, walk, message, author, reason, messages)?;
+    let mut notices = std::collections::BTreeMap::<StepId, Vec<String>>::new();
+    for RetryChoice {
+        choice,
+        run,
+        notice,
+    } in sessions
+    {
+        if let Some(run) = run {
+            let work: i64 = tx.sql().query_row(
+                "SELECT work_generation FROM steps WHERE project_id=?1 AND step_id=?2",
+                params![context.project.to_string(), choice.step.as_str()],
+                |r| r.get(0),
+            )?;
+            tx.sql().execute(
+                "UPDATE runs SET stopped=json_set(coalesce(stopped,'{}'),'$.retry.session',json(?2),'$.retry.work',?3) WHERE run_id=?1",
+                params![run, serde_json::to_string(&choice.session)?, work],
+            )?;
+        }
+        if let Some(notice) = notice {
+            let bodies = notices.entry(choice.step.clone()).or_default();
+            if !bodies.contains(&notice) {
+                bodies.push(notice);
+            }
+        }
+        result.sessions.push(choice);
+    }
+    for (step, notices) in notices {
+        let body: String = notices.join("\n").chars().take(8000).collect();
+        messages.post_retry(tx, context.project, &step, &body, "sluice")?;
+    }
+    Ok(result)
+}
+
+struct RetryChoice {
+    choice: RetrySession,
+    run: Option<String>,
+    notice: Option<String>,
+}
+
+/// Decide before clearing failures. Persist the choice on the predecessor's retry record,
+/// scoped to the next work generation so a later plan edit cannot inherit a fresh override.
+fn retry_sessions(
+    tx: &WriteTransaction<'_>,
+    context: &PlanContext,
+    walk: &sluice_model::units::RetryWalk,
+    messaged: bool,
+    fresh: bool,
+    messages: &impl RetryMessages,
+) -> Result<Vec<RetryChoice>> {
+    let state = read_state(tx.sql(), context.project)?;
+    let mut choices = vec![];
+    for id in walk.resets() {
+        let step = &context.plan.steps()[id];
+        if fresh && step.bindings.contains_key("session") {
+            return Err(invalid(format!(
+                "step {id}: fresh cannot be combined with a bound session"
+            )));
+        }
+        let inputs = effective_map(&context.plan, &state, step)?;
+        let explicit = inputs
+            .as_ref()
+            .and_then(|i| i.0.get("session"))
+            .and_then(|s| s.as_value().as_str());
+        let step_error: Option<String> = tx.sql().query_row(
+            "SELECT error FROM steps WHERE project_id=?1 AND step_id=?2",
+            params![context.project.to_string(), id.as_str()],
+            |r| r.get(0),
+        )?;
+        let cancelled = step_error
+            .as_deref()
+            .is_some_and(sluice_model::shown::stored_is_cancel);
+        let mut query = tx.sql().prepare(
+            "SELECT r.run_id,r.item_index,r.result FROM runs r WHERE r.project_id=?1 AND r.step_id=?2
+             AND r.generation=(SELECT generation FROM steps WHERE project_id=?1 AND step_id=?2)
+             AND NOT EXISTS(SELECT 1 FROM runs n WHERE n.project_id=r.project_id AND n.step_id=r.step_id AND n.generation=r.generation AND n.item_index=r.item_index
+               AND (n.created_at>r.created_at OR (n.created_at=r.created_at AND n.run_id>r.run_id))) ORDER BY r.item_index"
+        )?;
+        let rows = query
+            .query_map(params![context.project.to_string(), id.as_str()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        if rows.is_empty() {
+            choices.push(RetryChoice {
+                choice: RetrySession {
+                    step: id.clone(),
+                    item_index: -1,
+                    session: explicit.filter(|s| !s.is_empty()).map(str::to_owned),
+                },
+                run: None,
+                notice: None,
+            });
+        }
+        for (run, item, result) in rows {
+            let mut item_inputs = inputs.clone();
+            if let (Some(name), Some(inputs)) = (&step.scatter, &mut item_inputs)
+                && let Some(value) = inputs
+                    .0
+                    .get(name)
+                    .and_then(|v| v.as_value().as_array())
+                    .and_then(|items| usize::try_from(item).ok().and_then(|i| items.get(i)))
+                    .cloned()
+            {
+                inputs.0.insert(name.clone(), value.try_into()?);
+            }
+            let explicit = item_inputs
+                .as_ref()
+                .and_then(|i| i.0.get("session"))
+                .and_then(|s| s.as_value().as_str());
+            let result: Value = result
+                .map(|r| serde_json::from_str(&r))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if step.scatter.is_some()
+                && state.status(id) == StepStatus::Failed
+                && result["status"] == "succeeded"
+            {
+                continue;
+            }
+            let error = result
+                .get("error")
+                .filter(|e| e.is_object())
+                .map(|e| serde_json::from_value::<PublicError>(e.clone()))
+                .transpose()?
+                .or_else(|| {
+                    step_error
+                        .as_deref()
+                        .and_then(|e| serde_json::from_str(e).ok())
+                });
+            let failed = state.status(id) == StepStatus::Failed
+                && !cancelled
+                && error.is_some()
+                && !error.as_ref().is_some_and(|e| {
+                    sluice_model::shown::stored_is_cancel(&serde_json::to_string(e).expect("error"))
+                });
+            let recorded = messages.recorded_session(tx.sql(), &run, item_inputs.as_ref())?;
+            let session = if fresh {
+                None
+            } else if let Some(explicit) = explicit {
+                (!explicit.is_empty()).then(|| explicit.to_owned())
+            } else if failed || (messaged && walk.steps.contains(id)) {
+                recorded.filter(|s| !s.is_empty())
+            } else {
+                None
+            };
+            let notice = if failed && session.is_some() {
+                let error = error.expect("failed error");
+                let class = serde_json::to_value(error.failure_class())?;
+                Some(format!(
+                    "Manual retry after {}: {}. Continue the step's work.",
+                    class.as_str().unwrap_or("harness"),
+                    error.to_string().chars().take(2000).collect::<String>()
+                ))
+            } else {
+                None
+            };
+            choices.push(RetryChoice {
+                choice: RetrySession {
+                    step: id.clone(),
+                    item_index: item,
+                    session,
+                },
+                run: Some(run),
+                notice,
+            });
+        }
+    }
+    Ok(choices)
 }
 pub(crate) fn prepare_retry(
     tx: &WriteTransaction<'_>,
@@ -864,6 +1065,7 @@ pub(crate) fn apply_retry(
         steps: walk.steps,
         rearmed: walk.rearmed,
         stopped_at: walk.stopped_at,
+        sessions: vec![],
     })
 }
 /// Keep who cancelled or retried `step`, and why, on its latest run of each item (`runs.stopped`

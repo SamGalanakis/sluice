@@ -131,7 +131,11 @@ impl<F: AgentFactory> AgentFnHost<F> {
         environment.config.task.clone_from(&request.task);
         environment.config.cwd.clone_from(&request.cwd);
         environment.config.workspace.clone_from(&request.workspace);
-        environment.config.session.clone_from(&request.session);
+        // The factory may have resolved a manual retry's session choice. A bound
+        // input still wins, including the explicit empty-string fresh choice.
+        if request.session.is_some() {
+            environment.config.session.clone_from(&request.session);
+        }
         environment.config.model.clone_from(&request.model);
         environment.config.required = request.required.clone();
         environment.config.retry = request.retry;

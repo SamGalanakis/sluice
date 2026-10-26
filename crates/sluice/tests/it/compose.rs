@@ -909,6 +909,113 @@ run(main)
     );
 }
 
+// Lash lost hours of context when a bare retry followed a provider failure.
+#[test]
+fn failed_retry_resumes_without_feedback() {
+    let g = Gate::new();
+    g.script(json!({"fatal":true,"fatal_message":"codex HTTP 429 responseTooManyFailedAttempts"}));
+    let mut spec = agent(&g);
+    spec["limits"] = json!({"memory":"512MiB","cpus":2,"tasks":128});
+    g.plan(json!({"work":spec}));
+    let _lease = g.lease();
+    assert_eq!(g.terminal("work")["status"], "failed");
+    let first = g.run("work");
+    g.script(json!({"outputs":{"summary":"continued"}}));
+    let CommandReply::Retry(retry) = g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"]},"reason":"provider recovered"}})) else { panic!("retry") };
+    assert_eq!(retry.sessions[0].session.as_deref(), Some("fake-session"));
+    g.wait(|g| g.run("work") != first);
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let run = g.run("work");
+    let events: Vec<_> = g.events().into_iter().filter(|e| e["run"] == run).collect();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["command"]["command"] == "resume"
+                && e["command"]["session"] == "fake-session"),
+        "{events:?}"
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|e| e["command"]["command"] == "start_fresh")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e["command"]["text"].as_str().is_some_and(|text| text
+                .contains("Manual retry after provider_unavailable")
+                && text.contains("HTTP 429 responseTooManyFailedAttempts"))),
+        "{events:?}"
+    );
+}
+
+// A caller must be able to discard a failed session deliberately, including its messages.
+#[test]
+fn failed_retry_fresh_discards_session() {
+    let g = Gate::new();
+    g.script(json!({"fatal":true}));
+    let mut spec = agent(&g);
+    spec["limits"] = json!({"memory":"512MiB","cpus":2,"tasks":128});
+    g.plan(json!({"work":spec}));
+    let _lease = g.lease();
+    assert_eq!(g.terminal("work")["status"], "failed");
+    let first = g.run("work");
+    g.script(json!({"outputs":{"summary":"new context"}}));
+    let CommandReply::Retry(retry) = g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"]},"fresh":true,"message":"Start over","reason":"discard context","author":"@test"}})) else { panic!("retry") };
+    assert_eq!(retry.sessions[0].session, None);
+    g.wait(|g| g.run("work") != first);
+    assert_eq!(g.terminal("work")["status"], "succeeded");
+    let run = g.run("work");
+    let events: Vec<_> = g.events().into_iter().filter(|e| e["run"] == run).collect();
+    assert!(
+        events
+            .iter()
+            .any(|e| e["command"]["command"] == "start_fresh"),
+        "{events:?}"
+    );
+    assert!(!events.iter().any(|e| e["command"]["command"] == "resume"));
+    let mut inputs = agent(&g)["in"].clone();
+    inputs["session"] = json!({"default":"fake-session"});
+    g.rpc(json!({"command":"step_update","args":{"project":g.selector(),"step":"work","changes":{"in":inputs},"edit":{"reason":"bind context","author":"@test"}}}));
+    let refused = g.try_rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"]},"fresh":true,"reason":"conflicting choice"}}));
+    assert!(
+        matches!(refused, Err(sluice_model::error::PublicError::Invalid { ref message, .. }) if message.contains("fresh cannot be combined with a bound session")),
+        "{refused:?}"
+    );
+}
+
+// A missing rollout must be visible as a failure, never a successful fresh replacement.
+#[test]
+fn failed_retry_missing_session_is_a_named_harness_failure() {
+    let g = Gate::new();
+    g.script(json!({"fatal":true}));
+    let mut spec = agent(&g);
+    spec["limits"] = json!({"memory":"512MiB","cpus":2,"tasks":128});
+    g.plan(json!({"work":spec}));
+    let _lease = g.lease();
+    assert_eq!(g.terminal("work")["status"], "failed");
+    let first = g.run("work");
+    std::fs::write(g.home.join("fake-sessions.json"), "{}").unwrap();
+    g.script(json!({"outputs":{"summary":"must not start fresh"}}));
+    g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"]},"reason":"try missing rollout"}}));
+    g.wait(|g| g.run("work") != first);
+    let failed = g.terminal("work");
+    assert_eq!(failed["status"], "failed", "{failed}");
+    assert_eq!(failed["error"]["kind"], "MissingSession", "{failed}");
+    assert!(
+        failed["error"]
+            .to_string()
+            .contains("cannot resume session fake-session"),
+        "{failed}"
+    );
+    let run = g.run("work");
+    assert!(
+        !g.events()
+            .iter()
+            .any(|e| e["run"] == run && e["command"]["command"] == "start_fresh")
+    );
+}
+
 const FAKE: &str = r#"#!/usr/bin/python3
 import os, sys, json, socket, struct, pathlib, subprocess
 home = pathlib.Path(os.environ['SLUICE_HOME'])
@@ -961,7 +1068,7 @@ for line in sys.stdin:
             if config.get('commit_in'):
                 subprocess.run(['/usr/bin/git','-C',config['commit_in'],'-c','user.name=t','-c','user.email=t@t','commit','-q','--allow-empty','-m','work'],check=True)
         if config.get('fatal'):
-            state['error']={'kind':'fatal','message':'fixture terminal error'}
+            state['error']={'kind':'fatal','message':config.get('fatal_message','fixture terminal error')}
         elif config.get('marker_transient_once') and not (home/'turn-committed.injected').exists():
             (home/'turn-committed').write_text(run)
             state['status']='idle';state['turns_completed']=state['turns_started'];state['progress']+=1
@@ -1690,7 +1797,13 @@ fn retry_preserves_feedback_until_the_engine_acknowledges_it() {
         .into_iter()
         .filter(|e| e["command"]["id"]["kind"] == "message")
         .collect();
-    assert_eq!(deliveries.len(), 1, "{deliveries:?}");
+    assert_eq!(deliveries.len(), 2, "{deliveries:?}");
+    assert!(
+        deliveries[1]["command"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Manual retry after harness")
+    );
     assert_eq!(deliveries[0]["run"], third);
     assert!(
         deliveries[0]["command"]["text"]
@@ -1882,13 +1995,18 @@ fn agent_attempt_context_live_delivery_and_feedback() {
                 && text.contains("): gate queued, landing next"),
             "{text}"
         );
-        // A retry with nothing new resumes the session that has its messages and gives
-        // it none of them again.
+        // A succeeded step retried without feedback starts fresh, even if its old
+        // session had messages. Acknowledged messages are never replayed.
         g.script(json!({"outputs":{"summary":"resumed output"}}));
         g.rpc(json!({"command":"step_retry","args":{"project":g.selector(),"selection":{"steps":["work"],"tags":null},"message":null,"reason":"cap","author":"@test"}}));
         g.wait(|g| g.status()["steps"]["work"]["run_ids"][0] != run.as_str());
         assert_eq!(g.terminal("work")["status"], "succeeded");
-        assert_eq!(resumes(&g), resumed + 2);
+        assert_eq!(resumes(&g), resumed + 1);
+        assert!(
+            g.events()
+                .iter()
+                .any(|e| e["run"] == g.run("work") && e["command"]["command"] == "start_fresh")
+        );
         assert_eq!(delivered(&g), feedback, "events: {:?}", g.events());
     }
 }

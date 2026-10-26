@@ -1319,7 +1319,7 @@ never cause staleness.
 
 ### 7.4 Retry and re-arm
 
-`step_retry(project, steps?, tags?, message?, reason?)` takes steps that are `succeeded`,
+`step_retry(project, steps?, tags?, message?, fresh?, reason?)` takes steps that are `succeeded`,
 `failed` or `stale` (any other selected step refuses the whole call). Each goes back to
 `pending` and gets a `step.retry` record with its new work generation. A succeeded step keeps
 showing its old outputs until the new run ends; its dependents go stale only if the result
@@ -1329,7 +1329,9 @@ are unchanged.
 Retrying also **re-arms** the blocked region: from each retried step it walks dependents
 through handoffs and gates, passing through failed, stale and pending steps (failed and stale
 ones go back to `pending`, cancelled failures included) and stopping at succeeded, running and
-skipped steps. The reply is `{project, steps, rearmed, stopped_at}`. `message` (1 to 65536
+skipped steps. The reply is `{project, steps, rearmed, stopped_at, sessions}`. `sessions` lists
+`{step, item_index, session}` per retried item (`item_index: -1` for an unscattered step):
+a nonempty session id means resume, null means a fresh start. `message` (1 to 65536
 bytes) is posted to each retried step's thread in the same transaction, so its next run is
 assigned it. Pauses are kept.
 
@@ -1538,11 +1540,17 @@ scattered step gets the step's messages through its frozen batch window: startin
 consumes that window for future batches, and its items' acknowledgements leave the cursor
 alone.
 `runs/<run>/messages.json` shows the assigned range. Each run records `prev_run`, the step's (or
-item's) previous run, seen as `SLUICE_PREV_RUN` and `ctx.prev_run`. Agent fns resume the
-previous session when a bound `session` says so, or when `session` is unbound, the run was
-assigned messages or the previous session was given any (they are in it, and no later run is
-given them again), `prev_run` recorded a session, and the engine and cwd are unchanged;
-`session: ""` always starts fresh.
+item's) previous run, seen as `SLUICE_PREV_RUN` and `ctx.prev_run`. Agent fns honor a bound
+`session` first (`session: ""` always starts fresh).
+A manual `step_retry` of a failed step resumes the latest run's recorded session by default,
+with or without feedback, and sends one short message naming the failure class and message.
+This applies to every failure carrying a session, including provider unavailable/quota, stall,
+no submission, harness, resource kill and agent failures. `fresh: true` forces a new session
+and is refused with a bound `session`. Succeeded, stale and cancelled steps resume their
+recorded session when retried with a message, otherwise start fresh. The engine and cwd must
+be unchanged. Other relaunches with unbound `session` resume when assigned messages or when
+the previous session was given any. An engine that cannot load or refuses a session fails
+the run as `harness` with an error naming that session; it never silently starts fresh.
 
 ### 7.9 Adoption and completion
 
@@ -2251,7 +2259,7 @@ removed steps.
 | `plan_set_input` | `project`, `name`, `value`, `rev?`, `dry_run`, `reason`, `author?` | `{ok: true}`, or the preview |
 | `step_set_output` | `project`, `step`, `outputs`, `force=false`, `reason`, `author?` | `{ok: true}` |
 | `step_bypass` | `project`, `step`, `outputs={}`, `off=false`, `reason`, `author?` | `{project, step, status, bypass, applied}` (§7.7) |
-| `step_retry` | `project`, `steps?`, `tags?`, `message?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at}` |
+| `step_retry` | `project`, `steps?`, `tags?`, `message?`, `fresh?`, `reason`, `expected_rev?`, `author?` | `{project, steps, rearmed, stopped_at, sessions}` |
 | `step_cancel` | `project`, `steps?`, `tags?`, `reason`, `expected_rev?`, `author?` | `{ok: true}`; running, pending `core.external` or failed steps (§7.5) |
 | `step_submit` | `project`, `step`, `run`, `outputs`, `author?` | `{ok: true}` |
 | `step_progress` | `project`, `step`, `run`, `outputs` | `{project, step, run, progress, at}` (§6.4) |
@@ -3201,7 +3209,8 @@ An engine's account problems end the run at once, typed: a hard usage cap with `
 kind `QuotaExhausted`, an auth failure (logged out, a token expired or revoked, the account
 barred) with kind `AuthFailed`. Neither is transient: the supervisor neither retries nor replays
 input. A step with a restart policy (§6.1.1) retries quota failures after the reset and backoff;
-authentication still needs the owner. The failure keeps the session, so the step can also be retried with its `session` bound
+authentication still needs the owner. The failure keeps the session, so a manual `step_retry`
+resumes it by default
 once the owner has acted (after the reset or with quota added; after signing in again on this
 host), or run on another engine. A hard cap is a usage, plan, spend or credit limit whose reset
 is unknown, or any limit whose reset is more than `SLUICE_AGENT_QUOTA_RESET_MIN` (15) away. A

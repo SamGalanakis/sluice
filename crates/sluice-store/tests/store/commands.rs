@@ -161,6 +161,7 @@ mod support {
     }
     pub fn retry_request(project: ProjectId, steps: &[&str], message: Option<&str>) -> StepRetry {
         StepRetry {
+            fresh: false,
             expected_rev: None,
             project: ProjectSelector::Id(project),
             selection: StepSelection {

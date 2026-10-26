@@ -528,18 +528,10 @@ pub async fn session_policy(engine_name: &str) {
         }
         let result = run(cfg, &mut engine, &mut host).await;
         match case {
-            "gone" => {
-                assert!(
-                    result
-                        .unwrap()
-                        .notes
-                        .iter()
-                        .any(|n| n.contains("starting fresh"))
-                );
-                assert!(engine.commands.contains(&EngineCommand::StartFresh));
-            }
-            "fatal" => {
-                assert_eq!(result.unwrap_err().kind, FailureKind::EngineExited);
+            "gone" | "fatal" => {
+                let error = result.unwrap_err();
+                assert_eq!(error.kind, FailureKind::MissingSession);
+                assert!(error.message.contains("old-session"), "{error}");
                 assert!(!engine.commands.contains(&EngineCommand::StartFresh));
             }
             "lock" => {

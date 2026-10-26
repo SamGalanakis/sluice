@@ -43,7 +43,7 @@ async fn same_run_transient_reentry_uses_a_generic_continuation() {
     }
 }
 #[tokio::test]
-async fn missing_session_fallback_lock_conflict_and_missing_cwd() {
+async fn missing_session_refusal_lock_conflict_and_missing_cwd() {
     for engine in ["codex"] {
         support::session_policy(engine).await;
     }

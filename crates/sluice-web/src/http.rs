@@ -517,6 +517,7 @@ impl step::CommandService for SocketOwnerCommands {
                     })
                 }
                 step::Action::Retry => CommandRequest::StepRetry(StepRetry {
+                    fresh: false,
                     expected_rev: Some(Revision(command.revision)),
                     project,
                     selection,

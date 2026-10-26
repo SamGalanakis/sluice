@@ -74,10 +74,19 @@ impl EngineAdapter for Adapter {
                         retry_at: None,
                     })?
                     .unwrap_or_default();
-                Ok(sessions.get(session).map(|cwd| SessionMetadata {
-                    id: session.into(),
-                    cwd: cwd.clone(),
-                }))
+                sessions
+                    .get(session)
+                    .map(|cwd| {
+                        Some(SessionMetadata {
+                            id: session.into(),
+                            cwd: cwd.clone(),
+                        })
+                    })
+                    .ok_or_else(|| EngineError {
+                        kind: EngineErrorKind::MissingSession,
+                        message: format!("session {session} not found"),
+                        retry_at: None,
+                    })
             }
         }
     }
@@ -373,11 +382,27 @@ impl AgentFactory for Factory {
             )
             .await;
         }
-        let request = sluice_agents::AgentBuiltinRequest::build(
+        let mut request = sluice_agents::AgentBuiltinRequest::build(
             &invocation.name,
             &invocation.inputs,
             &prompt,
         )?;
+        if request.session.is_none() {
+            use rusqlite::OptionalExtension;
+            let run = self.launch.identity.run.to_string();
+            let reads = sluice_store::ReadPool::open(&self.home, 1).map_err(invalid)?;
+            let choice = reads.snapshot(move |sql| {
+                Ok(sql.query_row(
+                    "SELECT json_extract(p.stopped,'$.retry.session') FROM runs r JOIN runs p ON p.run_id=r.prev_run
+                     WHERE r.run_id=?1 AND json_type(p.stopped,'$.retry.session') IS NOT NULL
+                       AND json_extract(p.stopped,'$.retry.work')=r.work_generation",
+                    [run], |r| r.get::<_, Option<String>>(0),
+                ).optional()?)
+            }).await.map_err(invalid)?;
+            if let Some(session) = choice {
+                request.session = Some(session.unwrap_or_default());
+            }
+        }
         let bin = std::env::current_exe().map_err(invalid)?;
         let mut environment = environment::host_environment();
         // .env secrets go over the host allowlist; the SLUICE_* run variables still win.

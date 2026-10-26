@@ -155,8 +155,8 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
     (`docs("inbox")`) or in your reply in the conversation: only the owner can sign in again on
     the host or add quota.
   - Once the owner says it is fixed (`AuthFailed`), or after the reset or once quota is added
-    (`QuotaExhausted`), `step_retry` with the step's `session` bound to it to resume the same
-    agent. Or, if the work cannot wait, rerun the step on another engine.
+    (`QuotaExhausted`), `step_retry` to resume the recorded session by default. Or, if the work
+    cannot wait, rerun the step on another engine.
 
   A short rate limit is not either kind: it stays `transient` and is retried inside the run,
   just after its reset when the engine reported one.
@@ -166,7 +166,7 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   "continue where you left off" input; only a network still down after that fails the step
   `transient`, with a message naming the cause (`codex: network error
   (responseStreamDisconnected, HTTP 403); Codex gave up after its own retries. Codex said: …`)
-  and the `session`. `step_retry` with that `session` bound resumes it once the network is back.
+  and the `session`. `step_retry` resumes that session by default once the network is back.
 - A Claude or Devin agent that stops before its first turn on a screen nobody can answer
   (Claude's first-run setup, its API-key prompt, updated terms, managed-settings or MCP-server
   approval, a required update; Devin's organization picker or workspace-trust prompt; or any
@@ -176,7 +176,7 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   (theme picker) — Claude Code's first-run setup is unfinished for the account it runs as: run
   `claude` once on this host as that user and finish it (…), then step_retry. Claude showed:
   Let's get started. | …``. Treat it as `AuthFailed`: tell the owner the message as given, do
-  not `step_retry` until they say it is answered, then retry with the `session` bound, or run
+  not `step_retry` until they say it is answered, then `step_retry` to resume its session, or run
   the step on another engine.
 - An engine CLI that updated itself keeps running: a version newer than the ones sluice was
   tested on runs untested, and the run's result `notes` say so (`codex 0.161.0 is newer than
@@ -203,9 +203,14 @@ and declare the outputs it will produce. How to shape a plan around them: `docs(
   note}`. Look at what an earlier attempt left before redoing or undoing it.
 - Every agent function takes `session` and returns `session`: bind a later step's `session` to
   an earlier step's `session` output to continue that same agent (or `fn_call` it with the
-  session to follow up by hand). An unbound `session` may still resume the previous attempt's
-  session after a retry — the agent fns decide from the assigned messages and `prev_run`: a
-  run resumes when it was assigned messages or the previous session was given any. A message
+  session to follow up by hand). A manual `step_retry` of a failed step resumes its recorded
+  session by default, even without a message, and sends a short note with the failure class
+  and message. This includes provider failures, quota, stalls, missing submissions, harness
+  errors and resource kills. Pass `fresh=true` to start a new session; it is refused together
+  with a bound `session`. An explicit binding wins otherwise (`session: ""` starts fresh).
+  Succeeded, stale and cancelled steps resume when retried with a message, else start fresh.
+  The engine and cwd must still match. If the engine cannot load or refuses the session,
+  the run fails as `harness` naming the session; it never silently starts fresh. A message
   a session acknowledged is never given to the step's later runs again.
 - An agent that works in its own worktree while `cwd` is the repository root: bind
   `workspace` to that worktree's path. Its `git` facts and the note's `git status` then come
@@ -441,9 +446,11 @@ on news `cadence:1d` so its silence is not flagged.
   anyway, and the step turns stale once those values are all there.
 - `step_retry(project, steps=[...])`: run failed, stale, succeeded or manually set steps again.
   Retrying also re-arms the failed and stale steps directly blocked behind it (`{steps,
-  rearmed, stopped_at}`); a skipped step is decided by its gates, never retried. Pass
+  rearmed, stopped_at, sessions}`); a skipped step is decided by its gates, never retried. Pass
   `message="..."` to post that message to each retried step — the send-back: its next run
-  starts with the message first.
+  starts with the message first. `sessions` lists `{step, item_index, session}` for each
+  retried item (`item_index: -1` for an unscattered step): a session id means resume, null
+  means fresh. Failed steps resume by default; pass `fresh=true` to discard that context.
 
 ## Dropping a step
 To keep a pending step from running while the steps after it still go on, bypass it: it
