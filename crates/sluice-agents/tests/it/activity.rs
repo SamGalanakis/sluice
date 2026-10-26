@@ -299,3 +299,169 @@ fn native_activity_preserves_turns_results_windows_and_incremental_reads() {
         assert!(!call.result.contains("ghp_"));
     }
 }
+
+/// The lash time audit could not distinguish a rebuild from model wait. The wall
+/// partition counts concurrent commands once, while the command ranking sums both.
+#[test]
+fn run_time_split_partitions_parallel_commands_model_tools_and_idle_incrementally() {
+    use sluice_agents::activity::time_split;
+    let start = 1_790_812_800_000;
+    for engine in ["codex", "claude"] {
+        let (_home, homes, run, laid) = laid(engine);
+        let fixture = std::fs::read_to_string(format!(
+            "{}/tests/fixtures/activity/timing-{engine}.jsonl",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+        std::fs::write(&laid.transcript, &fixture).unwrap();
+        let window = Window {
+            since_ms: start,
+            until_ms: Some(start + 100_000),
+        };
+        let split = time_split(&homes, &run, window, start + 100_000).unwrap();
+        assert_eq!(
+            (split.model_s, split.commands_s, split.tools_s, split.idle_s),
+            (40.0, 20.0, 10.0, 30.0),
+            "{engine}: {split:?}"
+        );
+        assert_eq!(split.top_commands.len(), 1);
+        assert_eq!(split.top_commands[0].command, "cargo build");
+        assert_eq!(split.top_commands[0].count, 2);
+        assert_eq!(split.top_commands[0].seconds, 30.0);
+        // Same result through the append-only cache, with an unfinished JSONL suffix.
+        let lines: Vec<_> = fixture.lines().collect();
+        std::fs::write(&laid.transcript, format!("{}\n", lines[..3].join("\n"))).unwrap();
+        let partial = time_split(&homes, &run, window, start + 100_000).unwrap();
+        assert_ne!(partial, split);
+        std::fs::write(&laid.transcript, &fixture).unwrap();
+        assert_eq!(
+            time_split(&homes, &run, window, start + 100_000).unwrap(),
+            split
+        );
+        assert_eq!(
+            time_split(&homes, &run, window, start + 100_000).unwrap(),
+            split
+        );
+        std::fs::write(&laid.transcript, format!("{fixture}invalid JSON\n")).unwrap();
+        assert!(time_split(&homes, &run, window, start + 100_000).is_none());
+        std::fs::write(&laid.transcript, "").unwrap();
+        assert!(time_split(&homes, &run, window, start + 100_000).is_none());
+        std::fs::remove_file(&laid.transcript).unwrap();
+        assert!(time_split(&homes, &run, window, start + 100_000).is_none());
+    }
+}
+
+/// A background cargo build must remain command time after exec yields to the model.
+/// Charging only the first exec response used to hide almost all of a long build.
+#[test]
+fn run_time_split_follows_yielded_command_sessions_across_model_work() {
+    use serde_json::json;
+    use sluice_agents::activity::time_split;
+    let records = [
+        (
+            "00",
+            json!({"type":"message","role":"user","content":"task"}),
+        ),
+        (
+            "10",
+            json!({"type":"function_call","call_id":"a","name":"exec_command","arguments":r#"{"cmd":"cargo test --locked"}"#}),
+        ),
+        (
+            "11",
+            json!({"type":"function_call_output","call_id":"a","output":r#"{"session_id":123,"output":"building"}"#}),
+        ),
+        (
+            "30",
+            json!({"type":"function_call","call_id":"b","name":"write_stdin","arguments":r#"{"session_id":123}"#}),
+        ),
+        (
+            "40",
+            json!({"type":"function_call_output","call_id":"b","output":r#"{"exit_code":0,"output":"passed"}"#}),
+        ),
+    ];
+    for wrapped in [false, true] {
+        let (_home, homes, run, laid) = laid("codex");
+        let records = records.clone().map(|(at, mut payload)| {
+            if wrapped && payload["type"] == "function_call" {
+                let command = if payload["name"] == "exec_command" {
+                    r#"text(await tools.exec_command({cmd:"cargo test --locked"}));"#
+                } else {
+                    "text(await tools.write_stdin({session_id:123}));"
+                };
+                payload["name"] = json!("exec");
+                payload["type"] = json!("custom_tool_call");
+                payload["input"] = json!(command);
+                payload.as_object_mut().unwrap().remove("arguments");
+            } else if wrapped {
+                if let Some(output) = payload.get_mut("output") {
+                    *output = json!([{"type":"input_text","text":output.as_str().unwrap()}]);
+                }
+            }
+            (at, payload)
+        });
+        let text = records
+        .into_iter()
+        .map(|(s, p)| {
+            json!({"timestamp":format!("2026-10-01T00:00:{s}Z"),"type":"response_item","payload":p})
+                .to_string()
+                + "\n"
+        })
+        .collect::<String>();
+        std::fs::write(&laid.transcript, text).unwrap();
+        let start = 1_790_812_800_000;
+        let split = time_split(
+            &homes,
+            &run,
+            Window {
+                since_ms: start,
+                until_ms: Some(start + 50_000),
+            },
+            start + 50_000,
+        )
+        .unwrap();
+        assert_eq!(split.commands_s, 30.0);
+        assert_eq!(split.model_s, 20.0);
+        assert_eq!(split.tools_s, 0.0);
+        assert_eq!(split.top_commands[0].command, "cargo test");
+        assert_eq!(split.top_commands[0].seconds, 30.0);
+    }
+}
+
+/// Exec batches must rank every command using the shell results' own durations; otherwise
+/// the first read in a batch can hide the rebuild that consumed the time.
+#[test]
+fn run_time_split_ranks_each_command_in_a_native_exec_batch() {
+    use serde_json::json;
+    use sluice_agents::activity::time_split;
+    let (_home, homes, run, laid) = laid("codex");
+    let records = [
+        json!({"timestamp":"2026-10-01T00:00:00Z","type":"response_item","payload":{"type":"message","role":"user","content":"task"}}),
+        json!({"timestamp":"2026-10-01T00:00:10Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"a","name":"exec","input":r#"text(await tools.exec_command({cmd:"cargo build --locked"})); text(await tools.exec_command({cmd:"cargo test --locked"}));"#}}),
+        json!({"timestamp":"2026-10-01T00:00:30Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"a","output":[{"type":"input_text","text":r#"{"wall_time_seconds":8,"exit_code":0}"#},{"type":"input_text","text":r#"{"wall_time_seconds":3,"exit_code":0}"#}]}}),
+    ];
+    std::fs::write(
+        &laid.transcript,
+        records
+            .iter()
+            .map(|r| r.to_string() + "\n")
+            .collect::<String>(),
+    )
+    .unwrap();
+    let start = 1_790_812_800_000;
+    let split = time_split(
+        &homes,
+        &run,
+        Window {
+            since_ms: start,
+            until_ms: Some(start + 50_000),
+        },
+        start + 50_000,
+    )
+    .unwrap();
+    assert_eq!(split.commands_s, 20.0);
+    assert_eq!(split.top_commands.len(), 2);
+    assert_eq!(split.top_commands[0].command, "cargo build");
+    assert_eq!(split.top_commands[0].seconds, 8.0);
+    assert_eq!(split.top_commands[1].command, "cargo test");
+    assert_eq!(split.top_commands[1].seconds, 3.0);
+}

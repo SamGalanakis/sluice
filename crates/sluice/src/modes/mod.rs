@@ -33,6 +33,7 @@ register_modes! {
     "agent hook" => agent::run,
     // p6-01's public commands live in the crate modules that own them.
     "tool" => crate::cli::run,
+    "status" => crate::cli::run,
     "say" => crate::cli::run,
     "ask" => crate::cli::run,
     "reply" => crate::cli::run,

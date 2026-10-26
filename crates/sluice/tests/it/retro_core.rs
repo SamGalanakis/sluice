@@ -223,6 +223,19 @@ async fn check_notes_repeat_without_stopping_an_agent_and_follow_its_owner() {
     )
     .await;
     run_health::check_at(&f.broker, at - 1).await.unwrap();
+    // Activity is queryable before any long-running check becomes due.
+    let stamps = sluice_store::query::query(
+        f.home.path(),
+        "SELECT started_at,elapsed_s,last_activity_at FROM steps WHERE step_id='work'",
+        None,
+        None,
+    )
+    .unwrap();
+    let stamps: Value = serde_json::from_slice(stamps.encoded()).unwrap();
+    assert!(stamps["rows"][0][0].as_str().unwrap().ends_with('Z'));
+    assert!(stamps["rows"][0][1].as_f64().unwrap() >= 0.0);
+    assert!(stamps["rows"][0][2].as_str().unwrap().ends_with('Z'));
+
     assert!(
         f.next(0, false).await["records"]
             .as_array()

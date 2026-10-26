@@ -419,3 +419,176 @@ async fn status_folds_done_units_cuts_briefly_and_shows_unit_rows() {
     assert_eq!(error["error"], "bad_request");
     f.close().await;
 }
+
+/// A coordinator used to expose run ids without any start or activity time, making a
+/// long-running worker impossible to audit without decoding ids and opening transcripts.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn status_running_and_step_get_report_stored_latest_run_times_and_transcript_costs() {
+    let f = Fixture::new().await;
+    f.unit("flow", true, json!({})).await;
+    f.wait_for("flow-work", "running").await;
+    f.unit("pending", false, json!({})).await;
+    let initial = f.status(json!({"all":true})).await;
+    let run = initial["steps"]["flow-work"]["run_ids"][0]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // Fixture timestamps deliberately disagree with the run id. This pins the stored-time
+    // rule and makes the elapsed assertion independent of scheduling and wall-clock sleeps.
+    let sql = rusqlite::Connection::open(f.home.path().join("sluice.db")).unwrap();
+    sql.execute("UPDATE runs SET created_at='2026-10-01T00:00:00Z',started_at='2026-10-01T00:00:00Z' WHERE run_id=?1",[&run]).unwrap();
+    let dir = f.home.path().join("runs").join(&run);
+    std::fs::create_dir_all(&dir).unwrap();
+    let session = "01a11b9b-1eaf-7db2-9d93-c35331e86f78";
+    std::fs::write(
+        dir.join("native.json"),
+        json!({"engine":"codex","session":session}).to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("agent-observation.json"),json!({"engine":"codex","model":"gpt-6.1 xhigh","last_activity_ms":1790812890000u64,"last_message":"Working on the timing audit. ".repeat(12)}).to_string()).unwrap();
+    let transcripts = f
+        .home
+        .path()
+        .join("codex-native-homes")
+        .join(session)
+        .join("sessions/2026/10/01");
+    std::fs::create_dir_all(&transcripts).unwrap();
+    let transcript = transcripts.join(format!("rollout-fixture-{session}.jsonl"));
+    std::fs::write(
+        &transcript,
+        include_str!("../../../sluice-agents/tests/fixtures/activity/timing-codex.jsonl"),
+    )
+    .unwrap();
+    let step = f
+        .ok("step_get", json!({"project":"p","step":"flow-work"}))
+        .await["step"]
+        .clone();
+    assert_eq!(step["started_at"], "2026-10-01T00:00:00Z");
+    assert!(step["elapsed_s"].as_f64().unwrap() > 100.0);
+    assert!(step["ended_at"].is_null());
+    assert_eq!(step["last_activity_at"], "2026-10-01T00:01:30Z");
+    let status = f.status(json!({})).await;
+    assert_eq!(
+        status["steps"]["flow-work"]["started_at"],
+        step["started_at"]
+    );
+    let units = f.status(json!({"view":"units"})).await;
+    assert_eq!(
+        units_by_name(&units)["flow"]["timing"]["flow-work"]["started_at"],
+        step["started_at"]
+    );
+    let running = f.status(json!({"view":"running"})).await;
+    assert_eq!(running["running"].as_array().unwrap().len(), 1);
+    assert_eq!(running["running"][0][0], "flow");
+    assert_eq!(running["running"][0][1], "flow-work");
+    assert_eq!(running["running"][0][2], "codex gpt-6.1 xhigh");
+    assert!(running["running"][0][6].as_str().unwrap().chars().count() <= 120);
+    assert!(
+        running["running"][0][7]
+            .as_str()
+            .unwrap()
+            .contains("cargo build")
+    );
+    let home = f.home.path().to_owned();
+    let cli = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_sluice"))
+            .env("SLUICE_HOME", home)
+            .env("TOKIO_WORKER_THREADS", "2")
+            .args(["status", "--running", "--project", "p"])
+            .output()
+            .unwrap()
+    })
+    .await
+    .unwrap();
+    assert!(
+        cli.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cli.stderr)
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(cli["running"][0][1], "flow-work");
+    // An existing park remains visible even though it has released its scheduling slot.
+    sql.execute("UPDATE attempts SET request=json_set(request,'$.park',json(?2)) WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1)",(&run,json!({"condition":{"kind":"lease","resource":"land","amount":1},"phase":"parked","requested_at":"2026-10-01T00:01:30Z","parked_at":"2026-10-01T00:01:30Z"}).to_string())).unwrap();
+    let parked = f.status(json!({"view":"running"})).await;
+    assert_eq!(parked["running"].as_array().unwrap().len(), 1);
+    assert!(parked["running"][0][5].as_str().unwrap().contains("land"));
+    // The 92 KB lash status incident: 25 workers must fit one compact reply even with
+    // long worker messages. Add the rest in one authored edit, then lay their fake runs.
+    let ops: Vec<_> = (1..25).map(|n| json!({"op":"step.add","step":format!("lane-{n}-work"),"spec":{"run":"fixture.submit","paused":true,"tags":[format!("unit:lane-{n}")],"in":{"value":{"default":"work"}}}})).collect();
+    f.ok(
+        "plan_edit",
+        json!({"project":"p","ops":ops,"reason":"timing fixture"}),
+    )
+    .await;
+    for n in 1..25 {
+        let step = format!("lane-{n}-work");
+        let attempt = sluice_model::ids::AttemptId::new().to_string();
+        let extra_run = sluice_model::ids::RunId::new().to_string();
+        sql.execute("INSERT INTO attempts(attempt_id,project_id,step_id,generation,work_generation,phase,request,inputs_hash,created_at) SELECT ?1,project_id,?2,1,1,'executing',request,inputs_hash,created_at FROM attempts WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?3)",(&attempt,&step,&run)).unwrap();
+        sql.execute("INSERT INTO runs(run_id,project_id,attempt_id,step_id,created_at,started_at) SELECT ?1,project_id,?2,?3,created_at,started_at FROM runs WHERE run_id=?4",(&extra_run,&attempt,&step,&run)).unwrap();
+        sql.execute(
+            "UPDATE steps SET status='running' WHERE step_id=?1",
+            [&step],
+        )
+        .unwrap();
+        let extra_dir = f.home.path().join("runs").join(&extra_run);
+        std::fs::create_dir_all(&extra_dir).unwrap();
+        for file in ["native.json", "agent-observation.json"] {
+            std::fs::copy(dir.join(file), extra_dir.join(file)).unwrap();
+        }
+    }
+    let compact = f.status(json!({"view":"running"})).await;
+    assert_eq!(compact["running"].as_array().unwrap().len(), 25);
+    assert!(
+        compact.to_string().len() <= 6100,
+        "{} bytes",
+        compact.to_string().len()
+    );
+    sql.execute(
+        "UPDATE steps SET status='succeeded' WHERE step_id LIKE 'lane-%'",
+        [],
+    )
+    .unwrap();
+    // Finish the fixture run at 100s; ended durations must freeze, including the idle gap.
+    sql.execute(
+        "UPDATE runs SET finished_at='2026-10-01T00:01:40Z' WHERE run_id=?1",
+        [&run],
+    )
+    .unwrap();
+    sql.execute(
+        "UPDATE steps SET status='succeeded' WHERE step_id='flow-work'",
+        [],
+    )
+    .unwrap();
+    let ended = f
+        .ok("step_get", json!({"project":"p","step":"flow-work"}))
+        .await["step"]
+        .clone();
+    assert_eq!(ended["ended_at"], "2026-10-01T00:01:40Z");
+    assert!((ended["elapsed_s"].as_f64().unwrap() - 100.0).abs() < 0.001);
+    assert_eq!(ended["time"]["model_s"], 40.0);
+    assert_eq!(ended["time"]["commands_s"], 20.0);
+    assert_eq!(ended["time"]["tools_s"], 10.0);
+    assert_eq!(ended["time"]["idle_s"], 30.0);
+    assert!(
+        f.status(json!({"view":"running"})).await["running"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    std::fs::remove_file(transcript).unwrap();
+    let unreadable = f
+        .ok(
+            "step_get",
+            json!({"project":"p","step":"flow-work","compact":true}),
+        )
+        .await;
+    assert!(unreadable["step"].as_object().unwrap().contains_key("time"));
+    assert!(unreadable["step"]["time"].is_null());
+    // The public query relation offers the same derived stamps, without parsing ids.
+    let query = sluice_store::query::query(f.home.path(),"SELECT started_at,ended_at,elapsed_s,last_activity_at FROM steps WHERE step_id='flow-work'",None,None).unwrap();
+    let query: Value = serde_json::from_slice(query.encoded()).unwrap();
+    assert_eq!(query["rows"][0][0], step["started_at"]);
+    assert!((query["rows"][0][2].as_f64().unwrap() - 100.0).abs() < 0.001);
+    f.close().await;
+}

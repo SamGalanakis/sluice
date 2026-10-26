@@ -526,6 +526,25 @@ has, `log_read(project)` everything (`docs("threads")`).
 
 ## Keeping the plan short
 `status(project)` includes steps that never started, including one with a missing file input.
+For each step with a run it gives `started_at`, `ended_at` (null while live), `elapsed_s` and
+`last_activity_at` (null if unavailable) for its latest run. The units view puts those fields
+under `timing[step]`. These are stored times; you never need to decode a run id.
+
+Use `status(project, view="running")`, or `sluice status --running --project <project>`, to
+read all live workers in one compact reply. It contains only `columns` and `running`, an
+array of rows: unit, step, engine/model/effort, elapsed seconds, last activity age in seconds,
+parked/held reason, last worker words (up to 120 characters), and a time summary. Parked
+workers stay visible; pending and ended steps do not. Steps/tags still select workers.
+
+`step_get` adds `time` for the latest Codex or Claude run: `model_s` (active turn time outside
+tools), `commands_s`, `tools_s` (other tools), `idle_s` (between turns, including parks), and
+`top_commands` (up to five `{command, count, seconds}` groups, first two command words).
+Overlapping tools count once in the wall split; command group seconds sum individual calls.
+The running view gives percentages and the largest two command groups, for example
+`model 41% / commands 52% (kiln build 38m, kiln test 21m) / idle 7%`. A transcript that cannot
+be read yields `time: null`. Reads follow an incremental cache, so repeated status calls do
+not reread the transcript. The `steps` SQL query relation also exposes the four timing
+columns; its last activity snapshot follows the coordinator's 30-second maintenance tick.
 `status(project)` and `plan_view(project)` leave the done units out, saying how many
 (`done_units: {units, steps}` in `status`, one line in the view), so they show what is still
 going on; `status(steps=[...])` or `tags=[...]` returns what you ask for, done or not. The

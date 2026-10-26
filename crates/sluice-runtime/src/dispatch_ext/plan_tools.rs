@@ -94,12 +94,22 @@ pub async fn dispatch<H: ExecutionHost>(
                     ..Default::default()
                 };
                 let rows = plans::read_steps(sql, id, &selected, projection(request.compact))?;
-                let step = views(sql, id, rows.steps, request.compact, &recipes)?
+                let mut step = views(sql, id, rows.steps, request.compact, &recipes)?
                     .into_iter()
                     .next()
                     .ok_or_else(|| {
                         PublicError::from(PlanRowsError::NoStep { step: request.step })
                     })?;
+                match &mut step {
+                    StepView::Full(step) => {
+                        step.timing = crate::run_timing::run(sql, id, step.id.as_str(), true)?
+                            .map(|run| run.timing)
+                    }
+                    StepView::Compact(step) => {
+                        step.timing = crate::run_timing::run(sql, id, step.id.as_str(), true)?
+                            .map(|run| run.timing)
+                    }
+                }
                 Ok(CommandReply::Step(StepGetResult {
                     project: identity(sql, id)?,
                     rev: rows.rev,

@@ -163,6 +163,14 @@ pub(crate) fn status(
         let p = sluice_store::projects::resolve(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
         (json!({"project_id":id,"name":p.name}), p.board_rev)
     };
+    if query.view == StatusView::Running {
+        if query.brief || query.state.is_some() {
+            return Err(bad(
+                "brief and state apply to the steps and units views respectively",
+            ));
+        }
+        return running(sql, id, plan, &state, selected.as_ref());
+    }
     let queued = queued(sql, id, ctx.revision, plan, Some((catalog, cache)))?;
     let parks = resources::parked_steps(sql, id)?;
     let resources = resources_value(sql, id, ctx.revision, plan)?;
@@ -276,9 +284,15 @@ pub(crate) fn status(
                 )
                 .map(|u| u.steps.iter().map(|s| s.to_string()).collect())
                 .unwrap_or_default();
+            let mut timings = serde_json::Map::new();
             let mut due = vec![];
             let mut classes = serde_json::Map::new();
             for step in steps {
+                if let Some(timing) = crate::run_timing::latest(sql, id, &step)? {
+                    let mut value = serde_json::to_value(timing)?;
+                    value.as_object_mut().expect("timing object").remove("time");
+                    timings.insert(step.clone(), value);
+                }
                 due.extend(crate::run_health::due(sql, id, &step, now)?);
                 let raw: Option<String> = sql.query_row(
                     "SELECT error FROM steps WHERE project_id=?1 AND step_id=?2",
@@ -290,6 +304,7 @@ pub(crate) fn status(
                     classes.insert(step, json!(error.failure_class()));
                 }
             }
+            row["timing"] = json!(timings);
             row["check_due"] = json!(due);
             row["failure_class"] = json!(classes);
             let named = names.naming.unit(&unit);
@@ -329,6 +344,7 @@ pub(crate) fn status(
             continue;
         }
         let mut row: Value = serde_json::from_str(&row)?;
+        crate::run_timing::add(&mut row, crate::run_timing::latest(sql, id, step.as_str())?)?;
         sluice_model::error::show_failure(&mut row);
         row["check_due"] = json!(crate::run_health::due(sql, id, step.as_str(), now)?);
         if let Some(park) = parks.get(&step) {
@@ -571,4 +587,99 @@ fn last_messages(
             ))
         })
         .collect())
+}
+
+/// Column names once, positional rows: a large project's live work fits one tool reply.
+fn running(
+    sql: &Connection,
+    project: ProjectId,
+    plan: &sluice_model::Plan,
+    state: &sluice_model::gates::StateSnapshot,
+    selected: Option<&indexmap::IndexSet<StepId>>,
+) -> sluice_store::Result<Value> {
+    let parks = resources::parked_steps(sql, project)?;
+    let mut rows = vec![];
+    let now = crate::run_health::now_seconds();
+    for (id, step) in plan.steps() {
+        if state.status(id) != StepStatus::Running || selected.is_some_and(|s| !s.contains(id)) {
+            continue;
+        }
+        let Some(run) = crate::run_timing::run(sql, project, id.as_str(), true)? else {
+            continue;
+        };
+        let unit = step.unit_name();
+        let engine = run
+            .agent
+            .as_ref()
+            .map(|a| format!("{} {}", a.engine, a.model.as_deref().unwrap_or("unknown")))
+            .unwrap_or_else(|| step.run.to_string());
+        let activity: Option<i64> = run
+            .timing
+            .last_activity_at
+            .as_ref()
+            .map(|at| sql.query_row("SELECT max(0,?1-unixepoch(?2))", (now, at), |r| r.get(0)))
+            .transpose()?;
+        let waiting = sql
+            .prepare(
+                "SELECT resource FROM leases WHERE run_id=?1 AND state='waiting' ORDER BY resource",
+            )?
+            .query_map([&run.id], |r| r.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let reason = parks
+            .get(id)
+            .map(|p| format!("parked {}", p.until))
+            .unwrap_or_else(|| {
+                if waiting.is_empty() {
+                    String::new()
+                } else {
+                    format!("held {}", waiting.join(","))
+                }
+            });
+        let words = run
+            .agent
+            .as_ref()
+            .map(|a| {
+                a.last_message
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
+        let words: String = sluice_agents::engines::account::redact(&words)
+            .chars()
+            .take(120)
+            .collect();
+        rows.push(json!([
+            unit,
+            id,
+            engine,
+            run.timing.elapsed_s.round(),
+            activity,
+            reason,
+            words,
+            run.time.map(|t| t.compact())
+        ]));
+    }
+    // Spend at most ~6 KB on 25 live rows. Identities and timings stay intact; the last
+    // words use the remaining space, up to 120 characters per worker.
+    let mut out = json!({"columns":["unit","step","engine","elapsed_s","last_activity_age_s","reason","last","time"],"running":rows});
+    while out.to_string().len() > 6100 {
+        let Some(rows) = out["running"].as_array_mut() else {
+            break;
+        };
+        let longest = rows
+            .iter_mut()
+            .filter(|r| r[6].as_str().is_some_and(|s| !s.is_empty()))
+            .max_by_key(|r| r[6].as_str().map_or(0, str::len));
+        let Some(row) = longest else {
+            break;
+        };
+        let text = row[6].as_str().unwrap_or_default();
+        row[6] = json!(
+            text.chars()
+                .take(text.chars().count().saturating_sub(8))
+                .collect::<String>()
+        );
+    }
+    Ok(out)
 }

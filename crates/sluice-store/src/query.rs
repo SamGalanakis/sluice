@@ -12,7 +12,8 @@
 //! - `steps`: project_id, step_id, position, generation, work_generation,
 //!   declaration (the step as written), status, unit, paused, run, priority, needs (copies of
 //!   the declaration's fields), outputs, error, skipped, manual, inputs_hash, result_id,
-//!   run_ids, instances, total, done, delivery_cursor, progress, progress_at, progress_run
+//!   run_ids, instances, total, done, delivery_cursor, progress, progress_at, progress_run,
+//!   started_at, ended_at, elapsed_s, last_activity_at (latest-run timing projection)
 //!   (a running step's latest `step_progress` values, never final, cleared when its next run
 //!   starts).
 //! - `plans`: project_id, rev, root_order (the plan's present sections in order), state_epoch.
@@ -224,6 +225,15 @@ pub fn query_with_limits(
         schema::StoreError::Sql(e) => sql_error(e, 0),
         other => invalid(other.to_string()),
     })?;
+    // The database remains read-only. A connection-local projection adds live elapsed
+    // time to the public steps relation without materialising a clock-dependent column.
+    connection
+        .pragma_update(None, "query_only", false)
+        .map_err(|e| sql_error(e, 0))?;
+    connection.execute_batch("CREATE TEMP VIEW steps AS SELECT s.*,t.started_at,t.ended_at,t.elapsed_s,t.last_activity_at FROM main.steps s LEFT JOIN main.step_timing t USING(project_id,step_id)").map_err(|e| sql_error(e, 0))?;
+    connection
+        .pragma_update(None, "query_only", true)
+        .map_err(|e| sql_error(e, 0))?;
     for (kind, cap) in [
         (Limit::SQLITE_LIMIT_LENGTH, MAX_BYTES as i32),
         (Limit::SQLITE_LIMIT_SQL_LENGTH, MAX_SQL_BYTES as i32),

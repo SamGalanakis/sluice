@@ -61,6 +61,12 @@ pub enum Mode {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// A project status; --running shows compact live rows.
+    #[command(disable_help_flag = true)]
+    Status {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
     /// Alias of `sluice tool say`.
     #[command(disable_help_flag = true)]
     Say {
@@ -217,6 +223,7 @@ impl Mode {
             Self::PayloadExec(_) => "payload-exec",
             Self::Tool { .. } => "tool",
             Self::Say { .. } => "say",
+            Self::Status { .. } => "status",
             Self::Ask { .. } => "ask",
             Self::Reply { .. } => "reply",
             Self::Next { .. } => "next",
@@ -255,6 +262,17 @@ pub fn run(mode: Mode, home: PathBuf) -> ModeFuture {
         let name = mode.name();
         match mode {
             Mode::Tool { args } => tool(&home, args).await,
+            Mode::Status { args } => {
+                let mut argv = vec!["status".to_owned()];
+                for arg in args {
+                    if arg == "--running" {
+                        argv.extend(["--view".into(), "running".into()]);
+                    } else {
+                        argv.push(arg);
+                    }
+                }
+                tool(&home, argv).await
+            }
             Mode::Say { mut args } | Mode::Ask { mut args } | Mode::Reply { mut args } => {
                 args.insert(0, name.into());
                 tool(&home, args).await

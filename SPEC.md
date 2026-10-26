@@ -2298,7 +2298,29 @@ removed steps.
 outputs, error, run_ids, done, total, instances, manual, limits?, run_resources?, budget_error?, paused?, queued?, waiting?,
 finishing?}}, done_units?}`; a finishing step (§6.4) stays `running` and carries `finishing`.
 Every plan step has a status, including a step that never started or whose file input is
-missing. Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
+missing. A step with a run also exposes its latest run's `started_at`, nullable `ended_at`,
+`elapsed_s` and nullable `last_activity_at`: stored timestamps, never decoded run ids. Elapsed
+seconds advance until the stored finish; activity is the observation used by long-running
+checks (§7.5), with the same transcript fallback for older guardians. The units view carries
+these fields by step id in `timing`. `step_get` includes the same fields and nullable `time`:
+`{model_s, commands_s, tools_s, idle_s, top_commands: [{command, count, seconds}]}` for Codex
+and Claude, from their own transcripts and the run's stored time window. Active turn time
+outside tools is model wait; closed-turn gaps are idle/parked. Tool intervals are unioned,
+commands take precedence over other tools during overlaps, and command rankings sum each
+command's wall time, grouped by its first two words (leading env assignments ignored), at
+most five. The append-only transcript cache reads only new bytes. Unreadable or untimed
+transcripts yield null, never an estimated split.
+
+Running view (`view: "running"`, also `sluice status --running --project <project>`) returns
+only `{columns, running}`: positional rows under columns `unit`, `step`, `engine` (model and
+effort included), `elapsed_s`, `last_activity_age_s`, `reason`, `last`, `time`. Only running
+steps, including parked steps, appear; selection by steps/tags still applies. `reason` names
+a park or held section resource, `last` is the worker's last words on one line, capped at
+120 characters, and `time` is a compact percentage split with the two largest command groups
+(or null). Last words shorten further to keep 25 ordinary live rows within about 6 KB.
+`brief` and `state` are refused here. The SQL query relation `steps` adds the same four
+timing columns, with activity snapshots refreshed by the coordinator at its 30-second
+maintenance tick and on completion. `step_timing` exposes that derived projection too. Without a selection, done units are left out and counted in `done_units: {units, steps}` unless
 `all`. `brief` cuts strings over 200 characters (`… [n more characters]`). `resources` maps
 each to `{capacity, held, queued, error}`. `execution` reports the home-wide physical
 `total`, `held`, `unbounded_attempts` and capacity `reason`, with memory bytes, milli-CPUs
@@ -2320,7 +2342,7 @@ pending step that is not about to start has `waiting`, the reasons in order: `pa
 input <name> has no value`), each gate not satisfied (`after <entry> (<why>)`), the resource
 shortfall (`queued: needs lane 1 (4/4 held)`, with `queued` listing the resources), and for a
 `core.external` step with nothing else, `external: set its outputs with step_set_output`. Units view (`view: "units"`, `brief` refused): `{project, rev, board_rev, paused, resources?, execution,
-units: [{unit, title, recipe, state, shown, age, engine, steps, blocked, last, line, finishing?, parked?}], done_units?}`
+units: [{unit, title, recipe, state, shown, age, engine, steps, blocked, last, line, timing, finishing?, parked?}], done_units?}`
 (`recipe` the matched recipe's name or empty; the steps view gives each step `title` and, in a
 unit of more than one step, `stage`);
 `finishing` lists the unit's finishing steps `[{step, since, submission_seq, release}]`, whose

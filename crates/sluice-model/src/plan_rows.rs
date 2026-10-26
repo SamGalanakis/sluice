@@ -889,10 +889,22 @@ pub enum PauseValue {
     Reason(String),
 }
 
+/// Timing of the latest run, from stored timestamps and the engine transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RunTiming {
+    pub started_at: String,
+    pub ended_at: Option<String>,
+    pub elapsed_s: f64,
+    pub last_activity_at: Option<String>,
+    pub time: Option<crate::rpc::JsonValue>,
+}
+
 /// A step in a few fields, read from indexed columns without its declaration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompactStep {
+    #[serde(flatten, default)]
+    pub timing: Option<RunTiming>,
     pub id: StepId,
     pub unit: UnitName,
     /// The recipe its unit matches now, if any.
@@ -924,6 +936,8 @@ pub struct StepReference {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct FullStep {
+    #[serde(flatten, default)]
+    pub timing: Option<RunTiming>,
     pub id: StepId,
     pub unit: UnitName,
     pub recipe: Option<String>,

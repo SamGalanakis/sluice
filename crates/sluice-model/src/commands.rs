@@ -910,7 +910,7 @@ pub struct Next {
     pub settles: Settles,
 }
 
-/// `status` (SPEC §8): the steps view, or with `view: units` one compact row per unit.
+/// `status` (SPEC §8): steps, compact units, or running workers with timings.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StatusQuery {
@@ -935,6 +935,7 @@ pub enum StatusView {
     #[default]
     Steps,
     Units,
+    Running,
 }
 impl StatusView {
     fn is_steps(&self) -> bool {

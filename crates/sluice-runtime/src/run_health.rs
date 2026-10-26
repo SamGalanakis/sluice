@@ -22,7 +22,7 @@ fn home(sql: &Connection) -> &Path {
         .and_then(|p| Path::new(p).parent())
         .unwrap_or_else(|| Path::new(""))
 }
-fn native(home: &Path, run: &str, frozen: &Value) -> Option<AgentObservation> {
+pub(crate) fn native(home: &Path, run: &str, frozen: &Value) -> Option<AgentObservation> {
     let dir = home.join("runs").join(run);
     let observed = std::fs::read(dir.join("agent-observation.json"))
         .ok()
@@ -79,14 +79,32 @@ pub(crate) fn record_agent(tx: &mut WriteTransaction<'_>, run: RunId) -> sluice_
         [run.to_string()],
         |r| r.get(0),
     )?;
-    if let Some(agent) = native(
+    if let Some(mut agent) = native(
         home(tx.sql()),
         &run.to_string(),
         &serde_json::from_str(&raw)?,
     ) {
+        let (start,end) = tx.sql().query_row("SELECT cast(unixepoch(coalesce(started_at,created_at),'subsec')*1000 AS INTEGER),cast(unixepoch(finished_at,'subsec')*1000 AS INTEGER) FROM runs WHERE run_id=?1", [run.to_string()], |r| Ok((r.get::<_,i64>(0)?,r.get::<_,Option<i64>>(1)?)))?;
+        observe(
+            &sluice_agents::activity::Homes {
+                sluice: home(tx.sql()).into(),
+                claude: sluice_agents::activity::Homes::claude_from_env(),
+            },
+            &run.to_string(),
+            sluice_agents::activity::Window {
+                since_ms: start.max(0) as u64,
+                until_ms: end.map(|t| t.max(0) as u64),
+            },
+            &mut agent,
+        );
         tx.sql().execute(
-            "UPDATE runs SET agent_engine=?2,agent_model=?3 WHERE run_id=?1",
-            (run.to_string(), agent.engine, agent.model),
+            "UPDATE runs SET agent_engine=?2,agent_model=?3,last_activity_at=?4 WHERE run_id=?1",
+            (
+                run.to_string(),
+                agent.engine,
+                agent.model,
+                agent.last_activity_ms.map(sluice_agents::activity::rfc3339),
+            ),
         )?;
     }
     Ok(())
@@ -156,6 +174,7 @@ pub async fn check_at<H: ExecutionHost>(
     broker: &Coordinator<H>,
     now: i64,
 ) -> Result<(), PublicError> {
+    refresh_activity(broker).await?;
     let root = broker.home().to_owned();
     let candidates = broker
         .reads()
@@ -211,34 +230,18 @@ fn candidates(sql: &Connection, root: &Path, now: i64) -> sluice_store::Result<V
             continue;
         };
         let elapsed: i64 = row.get(5)?;
-        if agent.last_activity_ms.is_none() {
-            let outline = sluice_agents::activity::outline(
-                &sluice_agents::activity::Homes {
-                    sluice: root.to_owned(),
-                    claude: sluice_agents::activity::Homes::claude_from_env(),
-                },
-                &run,
-                sluice_agents::activity::Window {
-                    since_ms: ((now - elapsed).max(0) as u64) * 1000,
-                    until_ms: None,
-                },
-            );
-            if let Some(outline) = outline {
-                agent.last_activity_ms = outline
-                    .turns
-                    .iter()
-                    .filter_map(|t| t.ended_ms)
-                    .chain(
-                        outline
-                            .calls()
-                            .flat_map(|c| [c.started_ms, c.ended_ms].into_iter().flatten()),
-                    )
-                    .max();
-                if let Some(turn) = outline.turns.iter().rev().find(|t| !t.said.is_empty()) {
-                    agent.last_message.clone_from(&turn.said);
-                }
-            }
-        }
+        observe(
+            &sluice_agents::activity::Homes {
+                sluice: root.to_owned(),
+                claude: sluice_agents::activity::Homes::claude_from_env(),
+            },
+            &run,
+            sluice_agents::activity::Window {
+                since_ms: ((now - elapsed).max(0) as u64) * 1000,
+                until_ms: None,
+            },
+            &mut agent,
+        );
         agent.last_message = sluice_agents::engines::account::redact(&agent.last_message)
             .chars()
             .take(4000)
@@ -291,4 +294,70 @@ pub(crate) fn due(
         out.push(json!({"step":step,"run":run,"at":at,"overdue":now>=at}));
     }
     Ok(out)
+}
+
+/// The observation snapshot is authoritative; older guardians use the cached transcript.
+pub(crate) fn observe(
+    homes: &sluice_agents::activity::Homes,
+    run: &str,
+    window: sluice_agents::activity::Window,
+    agent: &mut AgentObservation,
+) {
+    if agent.last_activity_ms.is_some() {
+        return;
+    }
+    if let Some(outline) = sluice_agents::activity::outline(homes, run, window) {
+        agent.last_activity_ms = outline
+            .turns
+            .iter()
+            .filter_map(|t| t.ended_ms)
+            .chain(
+                outline
+                    .calls()
+                    .flat_map(|c| [c.started_ms, c.ended_ms].into_iter().flatten()),
+            )
+            .max();
+        if let Some(turn) = outline.turns.iter().rev().find(|t| !t.said.is_empty()) {
+            agent.last_message.clone_from(&turn.said);
+        }
+    }
+}
+
+/// Persist the same observed activity for SQL readers, including runs below the check
+/// threshold and projects whose long-running notifications are disabled.
+async fn refresh_activity<H: ExecutionHost>(broker: &Coordinator<H>) -> Result<(), PublicError> {
+    let root = broker.home().to_owned();
+    let observed = broker.reads().snapshot(move |sql| {
+        let mut q = sql.prepare("SELECT r.run_id,a.request,r.last_activity_at,cast(unixepoch(coalesce(r.started_at,r.created_at),'subsec')*1000 AS INTEGER) FROM runs r JOIN attempts a USING(attempt_id) WHERE r.finished_at IS NULL")?;
+        let mut rows = q.query([])?;
+        let mut updates = vec![];
+        let homes = sluice_agents::activity::Homes { sluice: root.clone(), claude: sluice_agents::activity::Homes::claude_from_env() };
+        while let Some(row) = rows.next()? {
+            let run: String = row.get(0)?;
+            let frozen: String = row.get(1)?;
+            let old: Option<String> = row.get(2)?;
+            if let Some(mut agent) = native(&root, &run, &serde_json::from_str(&frozen)?) {
+                observe(&homes, &run, sluice_agents::activity::Window { since_ms: row.get::<_,i64>(3)?.max(0) as u64, until_ms: None }, &mut agent);
+                let at = agent.last_activity_ms.map(sluice_agents::activity::rfc3339);
+                if at.is_some() && at != old { updates.push((run,at)); }
+            }
+        }
+        Ok(updates)
+    }).await.map_err(|e| e.into_public(true))?;
+    if observed.is_empty() {
+        return Ok(());
+    }
+    broker
+        .writer()
+        .write(RetrySafety::Idempotent, move |tx| {
+            for (run, at) in observed {
+                tx.sql().execute(
+                    "UPDATE runs SET last_activity_at=?2 WHERE run_id=?1",
+                    (run, at),
+                )?;
+            }
+            tx.changed(None, "status");
+            Ok(())
+        })
+        .await
 }

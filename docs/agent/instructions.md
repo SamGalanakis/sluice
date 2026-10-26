@@ -35,7 +35,7 @@ Workflow:
    any time. To cap how many steps run at once, declare resources on the project
    (`project_update(project, resources={"lane": 4})`) and give steps `needs` (`docs("plans")`,
    Resources). Every edit takes `dry_run: true` to see what would change before it does.
-4. Look with `status(project)`; wait for changes with `step_wait(project, steps, until)`,
+4. Look with `status(project)` (`view="running"` for compact live timings); wait for changes with `step_wait(project, steps, until)`,
    `log_wait(project, since_seq)` or `next(subscription=name)` (every step status change, call and
    message is a log record). A failed step stays failed until you
    act: fix the plan with `step_update` or `plan_edit` (pass `rev` if based on a read), then `step_retry`; or record

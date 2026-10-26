@@ -34,6 +34,7 @@ const ADDED_COLUMNS: &[(&str, &str, &str)] = &[
     ("runs", "failure_class", "TEXT"),
     ("runs", "agent_engine", "TEXT"),
     ("runs", "agent_model", "TEXT"),
+    ("runs", "last_activity_at", "TEXT"),
     ("projects", "history_seen", "INTEGER NOT NULL DEFAULT 0"),
     (
         "projects",
@@ -128,7 +129,13 @@ coalesce(json_extract(a.request,'$.park.parked_at'),json_extract(a.request,'$.pa
 max(0,(julianday('now')-julianday(coalesce(json_extract(a.request,'$.park.parked_at'),json_extract(a.request,'$.park.requested_at'))))*86400) AS waited_seconds,
 coalesce(json_extract(a.request,'$.park.timeout_seconds'),3600) AS timeout_seconds
 FROM runs r JOIN attempts a USING(attempt_id)
-WHERE r.finished_at IS NULL AND a.phase<>'terminal' AND json_type(a.request,'$.park')='object'")];
+WHERE r.finished_at IS NULL AND a.phase<>'terminal' AND json_type(a.request,'$.park')='object'"),
+("step_timing", "CREATE VIEW step_timing AS
+SELECT s.project_id,s.step_id,coalesce(r.started_at,r.created_at) AS started_at,
+r.finished_at AS ended_at,
+max(0,(julianday(coalesce(r.finished_at,'now'))-julianday(coalesce(r.started_at,r.created_at)))*86400) AS elapsed_s,
+r.last_activity_at
+FROM steps s LEFT JOIN runs r ON r.run_id=(SELECT x.run_id FROM runs x WHERE x.project_id=s.project_id AND x.step_id=s.step_id ORDER BY x.created_at DESC,x.run_id DESC LIMIT 1)")];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {

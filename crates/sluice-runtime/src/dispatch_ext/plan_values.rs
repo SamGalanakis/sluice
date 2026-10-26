@@ -46,6 +46,7 @@ pub fn step_views(
             let recipe = recipes.get(row.unit.as_str()).cloned();
             Ok(match row.declaration {
                 None => StepView::Compact(CompactStep {
+                    timing: None,
                     id: row.step,
                     unit: row.unit,
                     recipe,
@@ -75,6 +76,7 @@ pub fn step_views(
                         .collect();
                     refs.sort_by(|a, b| (&a.slot, a.ordinal).cmp(&(&b.slot, b.ordinal)));
                     StepView::Full(FullStep {
+                        timing: None,
                         id: row.step,
                         unit: row.unit,
                         recipe,

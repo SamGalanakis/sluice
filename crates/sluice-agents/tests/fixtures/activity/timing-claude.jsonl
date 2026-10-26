@@ -1,0 +1,10 @@
+{"timestamp": "2026-10-01T00:00:00Z", "type": "user", "message": {"content": "task"}}
+{"timestamp": "2026-10-01T00:00:10Z", "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "a", "name": "Bash", "input": {"command": "cargo build --locked"}}]}}
+{"timestamp": "2026-10-01T00:00:15Z", "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "b", "name": "Bash", "input": {"command": "cargo build -p small"}}]}}
+{"timestamp": "2026-10-01T00:00:20Z", "type": "assistant", "message": {"content": [{"type": "tool_use", "id": "c", "name": "Read", "input": {"file_path": "SPEC.md"}}]}}
+{"timestamp": "2026-10-01T00:00:25Z", "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "b", "content": "ok"}]}}
+{"timestamp": "2026-10-01T00:00:30Z", "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "a", "content": "ok"}]}}
+{"timestamp": "2026-10-01T00:00:40Z", "type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "c", "content": "ok"}]}}
+{"timestamp": "2026-10-01T00:01:00Z", "type": "assistant", "message": {"content": [{"type": "text", "text": "first done"}], "stop_reason": "end_turn"}}
+{"timestamp": "2026-10-01T00:01:20Z", "type": "user", "message": {"content": "resume"}}
+{"timestamp": "2026-10-01T00:01:30Z", "type": "assistant", "message": {"content": [{"type": "text", "text": "second done"}], "stop_reason": "end_turn"}}

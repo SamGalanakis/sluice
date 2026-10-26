@@ -10,6 +10,7 @@
 //! result and whether it failed, and its last words. Every text kept is masked
 //! (`account::redact`) and capped, so a transcript's secrets and huge outputs never reach a page
 //! whole.
+mod timing;
 use crate::engines::account::redact;
 use serde::Serialize;
 use serde_json::Value;
@@ -21,6 +22,7 @@ use std::{
     sync::{Arc, LazyLock, Mutex},
     time::SystemTime,
 };
+pub use timing::{CommandTime, TimeSplit, time_split};
 
 /// A transcript record longer than this is skipped (counted in `Outline::skipped`).
 pub const MAX_RECORD: usize = 8 * 1024 * 1024;
@@ -37,7 +39,7 @@ const RESULT_TAIL: usize = 1200;
 /// A call's key argument keeps one line of this many characters.
 const KEY_MOST: usize = 300;
 /// Transcripts the cache follows at once.
-const CACHED: usize = 48;
+const CACHED: usize = 128;
 /// Transcripts the pulse cache follows at once: every running row of a big plan, each kept as
 /// its times alone.
 const PULSED: usize = 512;
@@ -119,6 +121,10 @@ pub struct Call {
     /// When it started and ended, Unix milliseconds, when its transcript says.
     pub started_ms: Option<u64>,
     pub ended_ms: Option<u64>,
+    #[serde(skip)]
+    command_times: Vec<(String, Option<f64>)>,
+    #[serde(skip)]
+    yielded: bool,
 }
 
 /// What sluice sent to open a turn.
@@ -586,6 +592,8 @@ impl Follow {
             self.builder.run_dir.clone(),
             self.builder.window,
         );
+        self.snapshot = Arc::new(self.builder.outline());
+        self.times = Arc::default();
         self.offset = 0;
         self.carry.clear();
         self.skipping = false;
@@ -598,13 +606,14 @@ impl Follow {
             return None;
         }
         let (len, modified) = (meta.len(), meta.modified().ok());
-        if len < self.offset {
+        if len < self.offset || (len == self.offset && modified != self.modified) {
             self.reset();
         }
+        // Check access even for a cached snapshot: unreadable means unavailable.
+        let mut file = fs::File::open(path).ok()?;
         if len == self.offset && modified == self.modified && self.len == len {
             return Some(self.read());
         }
-        let mut file = fs::File::open(path).ok()?;
         file.seek(SeekFrom::Start(self.offset)).ok()?;
         let mut file = file.take(len - self.offset);
         let mut chunk = vec![0u8; 1024 * 1024];
@@ -613,7 +622,10 @@ impl Follow {
             let n = match file.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => n,
-                Err(_) => break,
+                Err(_) => {
+                    self.reset();
+                    return None;
+                }
             };
             self.offset += n as u64;
             self.lines(&chunk[..n]);
@@ -669,6 +681,9 @@ struct Builder {
     /// Devin's calls in the order they started, for its results (which carry no id).
     pending: Vec<(String, String, Value)>,
     seq: u64,
+    raw_codex: bool,
+    command_sessions: HashMap<String, String>,
+    polls: HashMap<String, String>,
     skipped: usize,
 }
 impl Builder {
@@ -681,6 +696,9 @@ impl Builder {
             open: HashMap::new(),
             pending: vec![],
             seq: 0,
+            raw_codex: false,
+            command_sessions: HashMap::new(),
+            polls: HashMap::new(),
             skipped: 0,
         }
     }
@@ -700,6 +718,7 @@ impl Builder {
             return;
         }
         let Ok(record) = serde_json::from_slice::<Value>(line) else {
+            self.skipped += 1;
             return;
         };
         match self.engine {
@@ -728,7 +747,9 @@ impl Builder {
         self.turns.last_mut().expect("a turn")
     }
     fn touch(&mut self, at: Option<u64>) {
-        if let (Some(at), Some(turn)) = (at, self.turns.last_mut()) {
+        if let (Some(at), Some(turn)) = (at, self.turns.last_mut())
+            && !turn.closed
+        {
             turn.ended_ms = Some(turn.ended_ms.map_or(at, |e| e.max(at)));
         }
     }
@@ -793,6 +814,8 @@ impl Builder {
             outcome: Outcome::Running,
             started_ms: at,
             ended_ms: None,
+            command_times: vec![],
+            yielded: false,
         };
         let turn = self.current(at);
         turn.calls.push(call);
@@ -810,6 +833,12 @@ impl Builder {
         let Some(call) = self.turns.get_mut(t).and_then(|t| t.calls.get_mut(c)) else {
             return;
         };
+        let durations = timing::command_durations(result);
+        if !call.yielded && durations.len() == call.command_times.len() {
+            for ((_, seconds), duration) in call.command_times.iter_mut().zip(durations) {
+                *seconds = Some(duration);
+            }
+        }
         call.result_chars = result.chars().count();
         call.result = head_tail(result);
         call.outcome = if failed {
@@ -884,6 +913,9 @@ impl Builder {
                         }
                     }
                 }
+                if record["message"]["stop_reason"] == "end_turn" {
+                    self.close(at);
+                }
             }
             Some("attachment") => {
                 if record["attachment"]["type"] == "queued_command"
@@ -926,6 +958,83 @@ impl Builder {
         if !self.window.holds(at) {
             return;
         }
+        if record["type"] == "response_item" {
+            let item = &record["payload"];
+            self.raw_codex = true;
+            match item["type"].as_str() {
+                Some("message") => match item["role"].as_str() {
+                    Some("user") => self.start(&content_text(&item["content"]), at),
+                    Some("assistant") => self.say(&content_text(&item["content"]), at),
+                    _ => {}
+                },
+                Some("function_call" | "custom_tool_call" | "local_shell_call") => {
+                    let id = item["call_id"]
+                        .as_str()
+                        .or(item["id"].as_str())
+                        .unwrap_or_default();
+                    let tool = item["name"].as_str().unwrap_or("shell");
+                    let raw = item["arguments"]
+                        .as_str()
+                        .or(item["input"].as_str())
+                        .unwrap_or_default();
+                    let input =
+                        serde_json::from_str(raw).unwrap_or_else(|_| Value::String(raw.into()));
+                    if let Some(session) = timing::poll_session(tool, &input) {
+                        self.polls.insert(id.to_owned(), session);
+                    }
+                    let commands = timing::wrapped_commands(tool, &input);
+                    if let Some(command) = commands.first() {
+                        self.call(id, "shell", &serde_json::json!({"command":command}), at);
+                        if let Some((t, c)) = self.open.get(id).copied() {
+                            self.turns[t].calls[c].command_times =
+                                commands.into_iter().map(|c| (c, None)).collect();
+                        }
+                    } else {
+                        self.call(
+                            id,
+                            tool.strip_prefix("functions.").unwrap_or(tool),
+                            &input,
+                            at,
+                        );
+                    }
+                }
+                Some("function_call_output" | "custom_tool_call_output") => {
+                    let id = item["call_id"].as_str().unwrap_or_default();
+                    let text = content_text(&item["output"]);
+                    let session = timing::result_session(&item["output"]);
+                    let polling = self.polls.remove(id);
+                    if let Some(polling) = polling
+                        && session.is_none()
+                        && let Some(original) = self.command_sessions.remove(&polling)
+                    {
+                        self.finish(&original, &text, false, at);
+                    }
+                    let command = self
+                        .open
+                        .get(id)
+                        .and_then(|(t, c)| self.turns.get(*t)?.calls.get(*c))
+                        .is_some_and(|c| {
+                            c.args
+                                .iter()
+                                .any(|(k, _)| matches!(k.as_str(), "command" | "cmd"))
+                        });
+                    if command && let Some(session) = session {
+                        // A yielded command is still running while the agent thinks. Its
+                        // later poll closes the original interval, rather than charging
+                        // those minutes to the model or ranking write_stdin as a command.
+                        if let Some((t, c)) = self.open.get(id).copied() {
+                            self.turns[t].calls[c].yielded = true;
+                        }
+                        self.command_sessions.insert(session, id.to_owned());
+                        self.touch(at);
+                    } else {
+                        self.finish(id, &text, false, at);
+                    }
+                }
+                _ => self.touch(at),
+            }
+            return;
+        }
         if record["type"] != "event_msg" {
             self.touch(at);
             return;
@@ -939,7 +1048,7 @@ impl Builder {
                 self.close(at);
             }
             Some("turn_aborted") => self.close(at),
-            Some("item_completed") => {
+            Some("item_completed") if !self.raw_codex => {
                 let item = &payload["item"];
                 let started = payload["started_at_ms"].as_u64().or(at);
                 let ended = payload["completed_at_ms"].as_u64().or(at);
