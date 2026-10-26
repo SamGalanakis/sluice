@@ -303,21 +303,25 @@ pub(crate) fn observe(
     window: sluice_agents::activity::Window,
     agent: &mut AgentObservation,
 ) {
-    if agent.last_activity_ms.is_some() {
+    if agent.last_activity_ms.is_some() && !agent.last_message.is_empty() {
         return;
     }
     if let Some(outline) = sluice_agents::activity::outline(homes, run, window) {
-        agent.last_activity_ms = outline
-            .turns
-            .iter()
-            .filter_map(|t| t.ended_ms)
-            .chain(
-                outline
-                    .calls()
-                    .flat_map(|c| [c.started_ms, c.ended_ms].into_iter().flatten()),
-            )
-            .max();
-        if let Some(turn) = outline.turns.iter().rev().find(|t| !t.said.is_empty()) {
+        if agent.last_activity_ms.is_none() {
+            agent.last_activity_ms = outline
+                .turns
+                .iter()
+                .filter_map(|t| t.ended_ms)
+                .chain(
+                    outline
+                        .calls()
+                        .flat_map(|c| [c.started_ms, c.ended_ms].into_iter().flatten()),
+                )
+                .max();
+        }
+        if agent.last_message.is_empty()
+            && let Some(turn) = outline.turns.iter().rev().find(|t| !t.said.is_empty())
+        {
             agent.last_message.clone_from(&turn.said);
         }
     }

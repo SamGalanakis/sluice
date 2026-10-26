@@ -489,6 +489,22 @@ async fn status_running_and_step_get_report_stored_latest_run_times_and_transcri
             .unwrap()
             .contains("cargo build")
     );
+    // Codex can publish an activity timestamp with empty final words while working.
+    // Keep that timestamp authoritative and recover its latest commentary from the rollout.
+    let observation = std::fs::read(dir.join("agent-observation.json")).unwrap();
+    let mut empty_words: Value = serde_json::from_slice(&observation).unwrap();
+    empty_words["last_message"] = json!("");
+    std::fs::write(dir.join("agent-observation.json"), empty_words.to_string()).unwrap();
+    let speaking = f.status(json!({"view":"running"})).await;
+    assert_eq!(speaking["running"][0][6], "second done");
+    let speaking = f
+        .ok("step_get", json!({"project":"p","step":"flow-work"}))
+        .await;
+    assert_eq!(
+        speaking["step"]["last_activity_at"],
+        step["last_activity_at"]
+    );
+    std::fs::write(dir.join("agent-observation.json"), observation).unwrap();
     let home = f.home.path().to_owned();
     let cli = tokio::task::spawn_blocking(move || {
         std::process::Command::new(env!("CARGO_BIN_EXE_sluice"))
