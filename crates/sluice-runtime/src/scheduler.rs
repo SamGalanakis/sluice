@@ -135,6 +135,8 @@ async fn reconcile_pass<H: ExecutionHost>(
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
+        let catalog = broker.catalog().clone();
+        let cache = broker.plan_cache();
         broker
             .writer()
             .write(RetrySafety::Idempotent, move |tx| {
@@ -143,6 +145,7 @@ async fn reconcile_pass<H: ExecutionHost>(
                 plans::reconcile(tx, &copy)?;
                 crate::watch::record_settlements(tx, project, copy.revision, &copy.plan)?;
                 resources::grant_leases(tx, project)?;
+                crate::engine_cap::refresh(tx, &catalog, &cache)?;
                 Ok(())
             })
             .await?;
@@ -396,6 +399,8 @@ async fn reconcile_pass<H: ExecutionHost>(
                     });
                 }
             }
+            let catalog = broker.catalog().clone();
+            let cache = broker.plan_cache();
             let launches=crate::install::admission_write(broker.writer(),RetrySafety::NonIdempotent,move|tx|{
                 lease(tx,&owner)?;
                 resources::grant_leases(tx,project)?;
@@ -414,9 +419,14 @@ async fn reconcile_pass<H: ExecutionHost>(
                     // The measured memory, counting the runs this batch already admitted at their charge.
                     if let Some(gate) = &gate && gate.hold(tx.sql(), &policy)?.is_some() { break; }
                     let mut inputs=inputs.clone();if let Some(name)=&step.scatter {inputs.0.insert(name.clone(),inputs.0[name].as_value().as_array().expect("checked scatter")[index].clone().try_into()?);}
+                    let engine = crate::engine_cap::engine(&step.run, &inputs);
+                    if let Some(engine) = &engine && crate::engine_cap::hold(tx.sql(), &catalog, &cache, engine, project, &step.id, None)?.is_some() { if step.scatter.as_deref()==Some("engine") { continue; } break; }
                     let capability=new_capability();let attempt=AttemptId::new();let run=RunId::new();
                     let provenance:JsonMap=serde_json::from_value(json!({"runtime":{"capability":capability,"execution":execution,"admitted_rev":copy.revision},"files":fingerprints}))?;
                     let reservation=attempts::reserve(tx,&copy,Reserve{step:step.id.clone(),attempt,run,item_index:if count.is_some(){index as i64}else{-1},item_count:count.map(|n|n as u64),inputs:inputs.clone(),inputs_hash:hash,provenance,release_id:crate::install::release_id("runtime-v1"),protocol_major:1,limits,admission:policy.clone()},&mut Hooks)?;
+                    if let Some(engine) = &engine {
+                        tx.sql().execute("UPDATE attempts SET request=json_set(request,'$.engine',?2) WHERE attempt_id=?1", (attempt.to_string(), engine))?;
+                    }
                     if let Some(job) = execution.as_ref().and_then(|e| e.job) { crate::registry::pin_run(tx,job,run)?; }
                     if let Some(gate) = &gate { gate.admitted(tx.sql(), reservation.identity.attempt)?; }
                     let id=&reservation.identity;
@@ -598,9 +608,12 @@ async fn record_queues<H: ExecutionHost>(
     gate: Option<crate::headroom::Gate>,
 ) -> Result<bool, PublicError> {
     let owner = owner.to_owned();
+    let catalog = broker.catalog().clone();
+    let cache = broker.plan_cache();
     broker.writer().write(RetrySafety::Idempotent, move |tx| {
         let mut host_held = false;
         lease(tx, &owner)?;
+        let engine_holds = crate::engine_cap::holds(tx.sql(), &catalog, &cache, context.project)?;
         let state = plans::read_state(tx.sql(), context.project)?;
         for step in context.plan.steps().values() {
             let continuing = state.status(&step.id) == StepStatus::Running && step.scatter.is_some();
@@ -640,6 +653,10 @@ async fn record_queues<H: ExecutionHost>(
                     Err(sluice_store::StoreError::Public(PublicError::Invalid { message, .. })) => resources::Fit { blocked: vec!["limits".into()], reason: message },
                     Err(error) => return Err(error),
                 };
+            }
+            if fit.fits() && let Some((blocked,reason)) = engine_holds.get(&step.id) {
+                host_held = true;
+                fit = resources::Fit { blocked: blocked.clone(), reason: reason.clone() };
             }
             if fit.fits() { continue; }
             let event = Event::StepQueued {

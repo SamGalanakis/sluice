@@ -100,7 +100,10 @@ throttling, or a hold until the host has memory or CPU free). Memory pressure me
 working memory, actual OOM events or sustained PSI stalls; file-cache reclaim alone is normal.
 Status counts working memory for admission and separates sampled peak working memory from
 the kernel peak including file cache; older working peaks are unknown. Adjust
-parallelism or limits; a host memory or CPU hold clears by itself. Local descendants share the cap; external services and remote
+parallelism or limits; a host memory, CPU or engine-cap hold clears by itself. Home-wide
+`execution.engines.<engine>.max_runs` caps concurrent engine runs across projects; status
+shows the cap and held counts by project under `execution.engines`. Parking frees a slot,
+and waking takes it back through admission. Local descendants share the cap; external services and remote
 executors need their own limits. See `docs("plans")`, Execution limits.
 
 For a standing orchestrator watcher, create a named filter with

@@ -35,6 +35,7 @@ fn queued(
     id: ProjectId,
     rev: Revision,
     plan: &sluice_model::Plan,
+    engine_context: Option<(&Catalog, &crate::plan_cache::PlanCache)>,
 ) -> sluice_store::Result<BTreeMap<StepId, (Vec<String>, String)>> {
     let mut out = BTreeMap::new();
     for candidate in resources::admit_order(sql, id, rev, plan)? {
@@ -53,6 +54,13 @@ fn queued(
     let execution = crate::budget::execution(home);
     // Admission's own last reading of the host, so status says what the scheduler decides.
     let sample = crate::headroom::published(home);
+    if execution.is_ok()
+        && let Some((catalog, cache)) = engine_context
+    {
+        for (step, reason) in crate::engine_cap::holds(sql, catalog, cache, id)? {
+            out.entry(step).or_insert(reason);
+        }
+    }
     let state = plans::read_state(sql, id)?;
     for step in plan.steps().values() {
         if step.is_external()
@@ -155,7 +163,7 @@ pub(crate) fn status(
         let p = sluice_store::projects::resolve(sql, &sluice_model::ids::ProjectSelector::Id(id))?;
         (json!({"project_id":id,"name":p.name}), p.board_rev)
     };
-    let queued = queued(sql, id, ctx.revision, plan)?;
+    let queued = queued(sql, id, ctx.revision, plan, Some((catalog, cache)))?;
     let parks = resources::parked_steps(sql, id)?;
     let resources = resources_value(sql, id, ctx.revision, plan)?;
     let paused = state.paused.is_paused();
@@ -178,6 +186,7 @@ pub(crate) fn status(
             "total": total,
             "memory": crate::headroom::shown(sql, &home, policy, headroom)?,
             "cpu": crate::headroom::shown_cpu(sql, &home, headroom)?,
+            "engines": crate::engine_cap::shown(sql, catalog, cache)?,
         }),
         Err(error) => json!({"error":error}),
     };
@@ -199,6 +208,21 @@ pub(crate) fn status(
                 .unit
                 .parse::<UnitName>()
                 .map_err(|e| sluice_store::StoreError::InvalidDatabase(e.to_string()))?;
+            if let Some(unit) = plan.units().get(&name) {
+                let reasons: Vec<_> = unit
+                    .steps
+                    .iter()
+                    .filter_map(|id| queued.get(id).map(|(_, reason)| reason.as_str()))
+                    .filter(|reason| !row.blocked.contains(reason))
+                    .collect();
+                if !reasons.is_empty() {
+                    if !row.blocked.is_empty() {
+                        row.blocked.push_str("; ");
+                    }
+                    row.blocked.push_str(&reasons.join("; "));
+                    row.line = status::line(row);
+                }
+            }
             if let Some(message) = plan.units().get(&name).and_then(|unit| {
                 unit.steps
                     .iter()
@@ -389,7 +413,7 @@ pub(crate) fn status(
             if let Some(finishing) = finishing.remove(&step) {
                 row.insert("finishing".into(), serde_json::to_value(finishing)?);
             }
-            if state.status(&step) == StepStatus::Pending {
+            if state.status(&step) == StepStatus::Pending || queued.contains_key(&step) {
                 let mut waiting = wait_reasons(plan, &state, spec);
                 if let Some((blocked, reason)) = queued.get(&step) {
                     row.insert("queued".into(), json!(blocked));
@@ -440,7 +464,7 @@ pub fn unit_rows(
     wanted: Option<&[sluice_model::commands::UnitState]>,
 ) -> sluice_store::Result<status::UnitsView> {
     let state = plans::read_state(sql, id)?;
-    let queued = queued(sql, id, rev, plan)?;
+    let queued = queued(sql, id, rev, plan, None)?;
     let finishing = sluice_store::attempts::finishing(sql, id)?;
     let facts = facts(sql, id, &queued, finishing)?;
     let last = last_messages(sql, id)?;

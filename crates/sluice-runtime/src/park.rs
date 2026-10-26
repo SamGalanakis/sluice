@@ -327,10 +327,29 @@ pub async fn supervise<H: ExecutionHost>(
                 .await
         }
         ParkOp::Wake { reason } => {
+            let catalog = broker.catalog().clone();
+            let cache = broker.plan_cache();
             broker
                 .writer()
                 .write(RetrySafety::Idempotent, move |tx| {
-                    let (woke, park) = resources::park_wake(tx, run, &reason)?;
+                    let (woke, park) = resources::park_wake_when(tx, run, &reason, |sql| {
+                        let Some(engine) = crate::engine_cap::run_engine(sql, run)? else {
+                            return Ok(true);
+                        };
+                        let (Some(project), Some(step)) = (id.project, id.step.as_ref()) else {
+                            return Ok(true);
+                        };
+                        Ok(crate::engine_cap::hold(
+                            sql,
+                            &catalog,
+                            &cache,
+                            &engine,
+                            project,
+                            step,
+                            Some(run),
+                        )?
+                        .is_none())
+                    })?;
                     view(tx.sql(), park, woke)
                 })
                 .await

@@ -741,10 +741,11 @@ sluice tool park --until lease:gate[:N] | pid:<n> | file:<path>[:<marker>] [--ti
 ```
 
 It answers `parked: true`; end your turn at once and do nothing else. The runner keeps your
-session, and while you wait it releases your step's `needs` (its lane), so another step can
+session, and while you wait it releases your step's `needs` (its lane) and engine slot, so another step can
 run. When the condition fires (the lease is granted, the process exits, the file exists and
 contains the marker), an addressed message arrives, or the timeout passes, the runner takes
-back the step's needs (queued by its priority) and resumes the same session with one message: `woke: lease:gate, lease 17`
+back the step's needs and its engine slot (queued by priority, then time waiting across
+projects) and resumes the same session with one message: `woke: lease:gate, lease 17`
 (`woke: your park condition did not happen within 600s: pid:4242` after a timeout).
 A message wakes you with `woke: woken by a message` and the message itself (say, ask, reply,
 or retry feedback); retry feedback to a parked step resumes that run. If `--timeout` is absent,
@@ -822,6 +823,17 @@ unavailable evidence is null. The latest run's limits remain the step's displaye
 is no longer pending. A running attempt keeps its frozen caps across retries and coordinator
 restarts. Changing project defaults or the home's policy changes future runs; changing a
 running step's limits is refused.
+
+**Engine concurrency is home-wide.** `execution.engines.codex.max_runs: 18` in the home's
+`config.json` limits Codex to 18 live runs across all projects. The same setting works for
+Claude and Devin; unset or null means unlimited, and zero holds new runs. Ready runs wait
+in priority order, then oldest first across projects, with `held: engine cap (codex, 18/18
+held, 2 queued ahead)`. Each scatter item takes a slot. Parking releases it when the turn
+ends; waking, automatic restarts and `step_retry` all pass through admission. A lowered cap
+leaves running work alone and admits nothing new until below the limit. Both status views
+show `execution.engines.<engine>: {max_runs, held, projects, queued}`: the home-wide held
+total, held counts by project name, and waiting runs. `sluice doctor` lists the configured
+caps. Project `lane` resources still control each project's own parallelism.
 
 **Admission is by measured memory and CPU.** A run starts while the host's MemAvailable less its
 reserve (`execution.host_reserve`, by default max(16 GiB, 15% of memory)) covers a small

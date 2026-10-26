@@ -24,6 +24,7 @@ pub mod watch;
 
 pub mod client;
 pub mod dispatch;
+mod engine_cap;
 pub mod execution;
 
 pub mod agent_factory;

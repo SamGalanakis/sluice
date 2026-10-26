@@ -50,6 +50,11 @@ impl FrozenFunction {
     }
 }
 pub trait CallRegistry: Send + Sync + 'static {
+    /// The published catalog lets engine admission rank queued calls alongside plan steps.
+    fn catalog(&self) -> Option<&crate::dispatch::Catalog> {
+        None
+    }
+
     fn freeze(&self, project: Option<ProjectId>, name: &str)
     -> Result<FrozenFunction, PublicError>;
 }
@@ -171,6 +176,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let call = RunId::new();
         let writer = self.writer.clone();
         let guardian = Arc::clone(&self.guardian);
+        let registry = Arc::clone(&self.registry);
         let direct = request.direct;
         let (policy, gate) = self.gate().await?;
         let (accepted, admission) = tokio::sync::oneshot::channel();
@@ -183,7 +189,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
                 tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,direct,author,created_at,limits) VALUES (?1,?2,?3,'pending',?4,?5,?6,?7,?8)", (call.to_string(), project.map(|p| p.to_string()), &function.name, serde_json::to_string(&request.inputs)?, direct, &request.author, at, request.limits.as_ref().map(serde_json::to_string).transpose()?))?;
                 tx.append_record(project, Event::Call { call, name: function.name.clone(), status: StepStatus::Pending, inputs: Some(request.inputs.clone()), outputs: None, error: None, direct, author: request.author })?;
                 tx.changed(project, "calls");
-                if direct { admit_tx(tx, call, project, function, request.inputs, &policy, gate.as_ref()).map(Some) } else { Ok(None) }
+                if direct { admit_tx(tx, call, project, (function, request.inputs), &policy, gate.as_ref(), registry.as_ref()).map(Some) } else { Ok(None) }
             }).await;
             match admitted {
                 Err(e) => { let _ = accepted.send(Err(e)); },
@@ -261,6 +267,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         check_function(&function, &name)?;
         validate_fields(&function.inputs, &status.inputs, "inputs")?;
         let guardian = Arc::clone(&self.guardian);
+        let registry = Arc::clone(&self.registry);
         let writer = self.writer.clone();
 
         let (policy, gate) = self.gate().await?;
@@ -270,7 +277,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
                 let pending: bool = tx.sql().query_row("SELECT EXISTS(SELECT 1 FROM calls WHERE call_id=?1 AND project_id IS ?2 AND status='pending' AND direct=0)", (call.to_string(), project.map(|p| p.to_string())), |r| r.get(0))?;
                 if !pending { return Ok(None); }
                 // A queued call held for the host's memory stays pending for the next tick.
-                match admit_tx(tx, call, project, function, status.inputs, &policy, gate.as_ref()) {
+                match admit_tx(tx, call, project, (function, status.inputs), &policy, gate.as_ref(), registry.as_ref()) {
                     Err(sluice_store::StoreError::Public(PublicError::Busy { message, .. })) if message.starts_with("held:") => Ok(None),
                     admitted => admitted.map(Some),
                 }
@@ -315,6 +322,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
         let call = RunId::new();
         let writer = self.writer.clone();
         let guardian = Arc::clone(&self.guardian);
+        let registry = Arc::clone(&self.registry);
         self.spawn(async move {
             let admitted = crate::install::admission_write(&writer,RetrySafety::NonIdempotent, move |tx| {
                 crate::drain::ensure_admission(tx, &crate::drain::Admission::Capacity { project, resource: resource.clone() })?;
@@ -323,7 +331,7 @@ impl<R: CallRegistry, G: CallGuardian> Calls<R, G> {
                 let at = timestamp(tx)?;
                 tx.sql().execute("INSERT INTO calls(call_id,project_id,fn,status,inputs,direct,author,created_at) VALUES (?1,?2,?3,'pending','{}',1,'capacity',?4)", (call.to_string(), project.to_string(), &function.name, at))?;
                 tx.append_record(Some(project), Event::Call { call, name: function.name.clone(), status: StepStatus::Pending, inputs: Some(JsonMap::default()), outputs: None, error: None, direct: true, author: Some("capacity".into()) })?;
-                let admitted = admit_tx(tx, call, Some(project), function, JsonMap::default(), &policy, gate.as_ref())?;
+                let admitted = admit_tx(tx, call, Some(project), (function, JsonMap::default()), &policy, gate.as_ref(), registry.as_ref())?;
                 tx.sql().execute("UPDATE attempts SET request=json_set(request,'$.capacity',json(?2)) WHERE attempt_id=?1", (admitted.attempt.to_string(), serde_json::json!({"resource":resource,"revision":declaration.revision}).to_string()))?;
                 Ok(Some(admitted))
             }).await?;
@@ -438,11 +446,12 @@ fn admit_tx(
     tx: &mut WriteTransaction<'_>,
     call: RunId,
     project: Option<ProjectId>,
-    function: FrozenFunction,
-    inputs: JsonMap,
+    request: (FrozenFunction, JsonMap),
     policy: &sluice_model::limits::ResourcePolicy,
     gate: Option<&crate::headroom::Gate>,
+    registry: &impl CallRegistry,
 ) -> sluice_store::Result<AdmittedCall> {
+    let (function, inputs) = request;
     let overrides: Option<String> = tx.sql().query_row(
         "SELECT limits FROM calls WHERE call_id=?1",
         [call.to_string()],
@@ -452,6 +461,15 @@ fn admit_tx(
         .map(|text| serde_json::from_str::<sluice_model::limits::LimitsOverride>(&text))
         .transpose()?;
     let limits = crate::budget::resolve(tx.sql(), project, overrides.as_ref(), policy)?;
+    if let Some(message) =
+        crate::engine_cap::hold_call(tx.sql(), &function.name, &inputs, call, registry.catalog())?
+    {
+        return Err(PublicError::Busy {
+            message,
+            retryable: true,
+        }
+        .into());
+    }
     if let Some(gate) = gate
         && let Some(hold) = gate.hold(tx.sql(), policy)?
     {
@@ -475,8 +493,7 @@ fn admit_tx(
     let attempt = AttemptId::new();
     let at = timestamp(tx)?;
     let hash = InputsHash::of(&inputs)?;
-    let frozen =
-        serde_json::json!({"function":function,"inputs":inputs,"limits":limits,"policy":policy});
+    let frozen = serde_json::json!({"function":function,"inputs":inputs,"limits":limits,"policy":policy,"engine":crate::engine_cap::engine(&function.name,&inputs)});
     tx.sql().execute("INSERT INTO attempts(attempt_id,project_id,phase,request,inputs_hash,created_at) VALUES (?1,?2,'reserved',?3,?4,?5)", (attempt.to_string(), project.map(|p|p.to_string()), frozen.to_string(), hash.to_string(), &at))?;
     resources::freeze_limits(tx, attempt, limits, policy)?;
     if let Some(gate) = gate {

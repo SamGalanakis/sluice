@@ -158,6 +158,9 @@ fn totals_follow_effective_capacity_without_rejecting_the_config() {
     // The new admission settings are checked too.
     for invalid in [
         json!({"execution":{"admission_warmup_s":-1}}),
+        json!({"execution":{"engines":{"codex":{"max_runs":-1}}}}),
+        json!({"execution":{"engines":{"codex":{"max_runs":1.5}}}}),
+        json!({"execution":{"engines":{"typo":{"max_runs":2}}}}),
         json!({"execution":{"total":{"memory":"96GiB"},"admission_charge":"2TiB"}}),
     ] {
         assert!(

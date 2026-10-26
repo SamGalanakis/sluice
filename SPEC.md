@@ -445,6 +445,7 @@ as inherited.
 ```json
 {"execution": {
   "total": {"memory": "96GiB", "cpus": 24, "tasks": 65536},
+  "engines": {"codex": {"max_runs": 18}},
   "ceilings": {"memory": "10GiB", "cpus": null, "tasks": null},
   "defaults": {"memory": "6GiB", "cpus": null, "tasks": null},
   "host_reserve": "16GiB",
@@ -508,6 +509,25 @@ section selects the defaults below.
 | Load limit | 1-minute load 1.5 per online CPU |
 | Starts per warm-up while CPU is over half a limit | 2 |
 | Workload slice CPU weight | 20 (systemd's default is 100) |
+
+**Engine concurrency.** `execution.engines.<engine>.max_runs` optionally caps live runs of
+that engine across every project in the home. It is a nonnegative integer; absent or null
+means unlimited, and zero holds all new runs. Engines are `claude`, `codex`, `devin` (and
+`fake` for fixtures). Every scatter item counts separately. Ready contenders take slots by
+priority, highest first, then oldest waiting first across projects. A contender blocked on
+its project resources does not reserve an engine slot. The engine is frozen from the run's
+inputs (or fixed by its agent builtin), so a later plan edit cannot change its accounting.
+An unfinished run holds its slot until completion proves it stopped; requesting cancellation
+does not release it. A parked run releases its engine slot once its turn ends, and its wake
+rejoins the same queue. Automatic restarts and `step_retry` use the same admission.
+Changes apply live; lowering a cap never kills a run, and no new run starts until the held
+count is below the cap. A ready step waits with `held: engine cap (<engine>, N/M held,
+K queued ahead)` and resource `engine:<engine>`, without failing. Both status views report
+`execution.engines.<engine>: {max_runs, held, projects, queued}` for configured caps: `held`
+is the home-wide total, `projects` maps project names to held counts, and `queued` counts
+ready waiting runs, including remaining scatter items and waking parks. `sluice doctor`
+lists configured caps (JSON: `engine_caps`). Calls share the held total; a queued call waits
+and a direct call receives the same retryable `busy` used for memory holds.
 
 **Admission by measured memory and CPU.** Before each admission the coordinator reads
 `/proc/meminfo` MemAvailable, `/proc/pressure/memory` and `/proc/pressure/cpu` `some avg10`
@@ -1033,7 +1053,7 @@ sources to succeed and is skipped when a source step is skipped.
 the input's type); every output becomes an array in item order. The step succeeds when every
 item does and fails if any fails, keeping the per-item results so a retry with unchanged inputs
 and item count preserves successful items and retries failed or not-yet-admitted items.
-A scattered step holds its `needs` once, but every item is admitted by measured memory on its
+A scattered step holds its `needs` once, but every item takes its own engine slot and is admitted by measured memory on its
 own (§2.5). Items start only as the host's memory permits; a large scatter does not start every
 local process at once.
 
@@ -1457,7 +1477,7 @@ condition that holds already answers `{parked: false, until, lease?, message}` a
 nothing (a lease granted at once is the run's). Otherwise the park is kept on the run's attempt
 and the answer is `{parked: true, until, lease, position, timeout_seconds, message}`: the agent
 ends its turn. When the turn has ended, the run's supervisor (§15) marks the run parked and the
-coordinator releases the step's needs in the same transaction, so a queued step may start; the
+coordinator releases the step's needs and engine slot in the same transaction, so a queued step may start; the
 engine's session stays up, idle. An addressed say, ask, reply, or step_retry with a message
 wakes it; the first message is delivered with `woke: woken by a message`, under its normal
 message delivery id, and any other messages follow in order. A retry with feedback to a parked
@@ -1466,7 +1486,8 @@ apply to other selected steps. Without `timeout`, config.json's `park_timeout_se
 (default 3600); zero is refused, and explicit longer bounds are allowed. When a message arrives,
 the condition fires or `timeout` seconds pass, the coordinator queues the step's
 needs again (`waking`), granted with the section leases in priority order before any new step
-is admitted; once they are held the park ends and the same session gets one input:
+is admitted; its engine slot is also reacquired in the home-wide admission queue (§2.5). Once
+both are held the park ends and the same session gets one input:
 `woke: <until>, lease <id>` (a granted lease), `woke: <until>` (pid, file), or
 `woke: your park condition did not happen within <n>s: <until>` (with `; lease <id> is still queued` when its lease was not
 granted). Agent runs have no total time limit; idle detection restarts after waking. A cancelled parked run stops

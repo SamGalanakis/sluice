@@ -1033,6 +1033,7 @@ pub fn park_enter(tx: &mut WriteTransaction<'_>, run_id: RunId) -> Result<Option
     if park.phase == ParkPhase::Requested {
         let run = run(tx.sql(), run_id)?;
         tx.sql().execute("UPDATE leases SET state='released',released_at=?2,release_id='park/'||lease_id WHERE kind='needs' AND group_id=?1 AND state='held'", params![run.group, now()?])?;
+        tx.changed(None, "execution");
         park.phase = ParkPhase::Parked;
         park.parked_at = Some(now()?);
         set_park(tx, run_id, Some(&park))?;
@@ -1049,6 +1050,16 @@ pub fn park_wake(
     run_id: RunId,
     reason: &str,
 ) -> Result<(bool, Option<ParkRequest>)> {
+    park_wake_when(tx, run_id, reason, |_| Ok(true))
+}
+
+/// Reacquire a parked run's needs only when home-wide admission also grants it a slot.
+pub fn park_wake_when(
+    tx: &mut WriteTransaction<'_>,
+    run_id: RunId,
+    reason: &str,
+    admitted: impl FnOnce(&Connection) -> Result<bool>,
+) -> Result<(bool, Option<ParkRequest>)> {
     let Some(mut park) = park_request(tx.sql(), run_id)? else {
         return Ok((true, None));
     };
@@ -1062,11 +1073,15 @@ pub fn park_wake(
         for (_, name, amount) in need_rows(tx.sql(), &run.group)? {
             tx.sql().execute("INSERT INTO leases(project_id,run_id,request_id,kind,group_id,scope,resource,amount,priority,state,created_at) VALUES (?1,?2,?3,'needs',?4,?1,?5,?6,?7,'waiting',?8)", params![run.project.to_string(), run_id.to_string(), format!("needs/{}/{name}/wake/{ordinal}", run.group), run.group, name, integer(amount)?, run.priority, now()?])?;
         }
+        tx.sql().execute("UPDATE attempts SET request=json_set(request,'$.engine_waking_at',?2) WHERE attempt_id=(SELECT attempt_id FROM runs WHERE run_id=?1)", (run_id.to_string(), now()?))?;
         park.phase = ParkPhase::Waking;
         park.woke = Some(reason.to_owned());
         set_park(tx, run_id, Some(&park))?;
         grant_leases(tx, run.project)?;
         changed(tx, run.project);
+    }
+    if !admitted(tx.sql())? {
+        return Ok((false, Some(park)));
     }
     let queued: bool = tx.sql().query_row(
         "SELECT EXISTS(SELECT 1 FROM leases WHERE kind='needs' AND group_id=?1 AND state='waiting')",
@@ -1077,6 +1092,7 @@ pub fn park_wake(
         return Ok((false, Some(park)));
     }
     set_park(tx, run_id, None)?;
+    tx.changed(None, "execution");
     changed(tx, run.project);
     Ok((true, Some(park)))
 }

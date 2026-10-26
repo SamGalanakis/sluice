@@ -162,6 +162,37 @@ impl HomeConfig {
     }
 }
 
+/// Optional home-wide concurrency ceiling for one engine. Zero holds all new runs.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EngineConfig {
+    pub max_runs: Option<u64>,
+}
+pub type EngineCaps = std::collections::BTreeMap<String, EngineConfig>;
+
+pub fn load_engine_caps(home: &Path) -> Result<EngineCaps, String> {
+    engine_caps(&execution_value(home)?)
+}
+fn engine_caps(value: &Value) -> Result<EngineCaps, String> {
+    let caps: EngineCaps = value
+        .get("execution")
+        .and_then(|v| v.get("engines"))
+        .map(|v| serde_json::from_value(v.clone()))
+        .transpose()
+        .map_err(|e| format!("invalid execution.engines: {e}"))?
+        .unwrap_or_default();
+    validate_engine_caps(&caps)?;
+    Ok(caps)
+}
+fn validate_engine_caps(caps: &EngineCaps) -> Result<(), String> {
+    for name in caps.keys() {
+        if !["claude", "codex", "devin", "fake"].contains(&name.as_str()) {
+            return Err(format!("unknown execution engine {name}"));
+        }
+    }
+    Ok(())
+}
+
 /// Admission by measured memory and CPU (SPEC §2.5): what must stay free for everything that
 /// is not a run, the memory and CPU pressure and the load above which no run starts, what a run
 /// not yet measured counts, and the workload slice's CPU weight.
@@ -346,6 +377,8 @@ fn configured_from_value(
     #[serde(deny_unknown_fields)]
     struct ExecutionConfig {
         #[serde(default)]
+        engines: EngineCaps,
+        #[serde(default)]
         defaults: LimitsOverride,
         #[serde(default)]
         ceilings: LimitsOverride,
@@ -373,6 +406,7 @@ fn configured_from_value(
         Some(value) => serde_json::from_value(value.clone())
             .map_err(|error| format!("invalid execution policy: {error}"))?,
     };
+    validate_engine_caps(&config.engines)?;
     // Unlimited memory is never an accident: a null at any level needs the opt-in.
     if !config.allow_unlimited_memory {
         for (level, layer) in [

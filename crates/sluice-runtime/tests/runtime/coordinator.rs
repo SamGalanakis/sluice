@@ -3286,3 +3286,234 @@ async fn memory_above_the_ceiling_needs_the_step_flag_and_the_project_allowance(
     let launch = fake.launched(1).await.remove(0);
     assert_eq!(launch.limits.memory_max_bytes, Some(768 << 20));
 }
+
+fn engine_cap_config(home: &home::ScratchHome, cap: u64) {
+    let path = home.path().join("config.json");
+    let mut config: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    config["execution"]["engines"] = json!({"codex":{"max_runs":cap}});
+    std::fs::write(path, config.to_string()).unwrap();
+}
+async fn engine_cap_project(b: &Coordinator<Fake>, name: &str) -> ProjectId {
+    let CommandReply::Project(p) = b.command(request(json!({"command":"project_create","args":{"name":name,"description":"","icon":null,"resources":{},"author":"test"}}))).await.unwrap() else {panic!("project")};
+    p.project_id
+}
+async fn engine_cap_step(
+    b: &Coordinator<Fake>,
+    p: ProjectId,
+    id: &str,
+    priority: i64,
+    repo: &std::path::Path,
+    extra: Value,
+) {
+    let mut spec = json!({"run":"agent.run","priority":priority,"in":{"engine":{"default":"codex"},"cwd":{"default":repo},"spec":{"default":"Work"}},"outputs":{"summary":"string"}});
+    spec.as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    b.command(request(json!({"command":"plan_edit","args":{"project":{"kind":"id","value":p},"ops":[{"op":"step.add","step":id,"spec":spec}],"start":true,"dry_run":false,"reason":"test","author":"test"}}))).await.unwrap();
+}
+async fn engine_cap_finish(b: &Coordinator<Fake>, launch: &Launch) {
+    b.complete(
+        journal(
+            b,
+            launch,
+            PayloadResult::Succeeded(decode_json(br#"{"summary":"done"}"#).unwrap()),
+        )
+        .await,
+    )
+    .await
+    .unwrap();
+}
+
+/// Incident 2026-10-26: independent project lanes admitted 24–27 Codex sessions against one
+/// account. A home cap chooses the highest priority and then oldest contender, irrespective
+/// of the project reconciled first. Completion releases one slot; lowering the cap drains
+/// naturally without killing running work. Status counts every project's slots in both views.
+#[tokio::test]
+async fn admission_engine_cap_orders_projects_and_lowering_it_only_holds_new_runs() {
+    let (home, b, f, p, repo) = agent_setup().await;
+    engine_cap_config(&home, 2);
+    let q = engine_cap_project(&b, "q").await;
+    engine_cap_step(&b, q, "high", 10, &repo, json!({})).await;
+    engine_cap_step(&b, q, "young", 0, &repo, json!({})).await;
+    b.acquire_scheduler("engines".into()).await.unwrap();
+    // Reconcile the newer project first: its high priority contender wins, but its younger
+    // equal-priority step cannot take the older project's slot.
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 1);
+    let launches = f.launched(2).await;
+    assert_eq!(launches[0].identity.step.as_ref().unwrap().as_str(), "high");
+    assert_eq!(launches[1].identity.project, Some(p));
+    for l in &launches {
+        run_started(&b, l).await;
+    }
+    for view in ["steps", "units"] {
+        let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":q},"view":view,"all":true,"selection":{"steps":null,"tags":null}}})).await;
+        assert_eq!(
+            status["execution"]["engines"]["codex"],
+            json!({"max_runs":2,"held":2,"projects":{"p":1,"q":1},"queued":1}),
+            "{status}"
+        );
+        if view == "steps" {
+            assert!(
+                status["steps"]["young"]["waiting"]
+                    .to_string()
+                    .contains("engine cap"),
+                "{status}"
+            );
+        }
+    }
+    engine_cap_finish(&b, &launches[0]).await;
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    let young = f.launched(3).await[2].clone();
+    run_started(&b, &young).await;
+    engine_cap_step(&b, q, "later", 0, &repo, json!({})).await;
+    engine_cap_config(&home, 1);
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 0);
+    let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":q},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(status["execution"]["engines"]["codex"]["held"], 2);
+    assert_eq!(status["steps"]["young"]["status"], "running");
+    engine_cap_finish(&b, &launches[1]).await;
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 0);
+    engine_cap_finish(&b, &young).await;
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    assert_eq!(
+        f.launched(4).await[3]
+            .identity
+            .step
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "later"
+    );
+}
+
+/// A parked session used to have no global slot to release or reacquire. It now frees one
+/// while idle, waits behind an occupied cap on wake, and resumes only after a slot is free.
+/// Scatter items each take a slot; step_retry and automatic restart cannot bypass the cap.
+#[tokio::test]
+async fn admission_engine_cap_covers_parks_scatter_retries_and_restarts() {
+    use sluice_model::park::{ParkOp, ParkPhase};
+    let (home, b, f, p, repo) = agent_setup().await;
+    engine_cap_config(&home, 1);
+    let q = engine_cap_project(&b, "q").await;
+    engine_cap_step(&b,q,"batch",0,&repo,json!({"scatter":"spec","in":{"engine":{"default":"codex"},"cwd":{"default":repo},"spec":{"default":["one","two"]}}})).await;
+    b.acquire_scheduler("engines".into()).await.unwrap();
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 1);
+    let first = f.launched(1).await[0].clone();
+    run_started(&b, &first).await;
+    b.command(request(json!({"command":"park","args":{"project":{"kind":"id","value":p},"run":first.identity.run,"until":"file:/not-present-engine-cap"}}))).await.unwrap();
+    let park = sluice_runtime::park::supervise(&b, first.identity.clone(), ParkOp::Enter)
+        .await
+        .unwrap();
+    assert_eq!(park.park.unwrap().phase, ParkPhase::Parked);
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    let item = f.launched(2).await[1].clone();
+    run_started(&b, &item).await;
+    let wake = async || {
+        sluice_runtime::park::supervise(
+            &b,
+            first.identity.clone(),
+            ParkOp::Wake {
+                reason: "fixture wake".into(),
+            },
+        )
+        .await
+        .unwrap()
+    };
+    assert!(!wake().await.woke);
+    let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":p},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(status["execution"]["engines"]["codex"]["held"], 1);
+    assert!(
+        status["steps"]["work"]["waiting"]
+            .to_string()
+            .contains("engine cap"),
+        "{status}"
+    );
+    let units = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":p},"view":"units","all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert!(
+        units["units"][0]["blocked"]
+            .to_string()
+            .contains("engine cap"),
+        "{units}"
+    );
+    engine_cap_finish(&b, &item).await;
+    // The batch's second item has waited longer than the newly waking session.
+    assert!(!wake().await.woke);
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    let item2 = f.launched(3).await[2].clone();
+    run_started(&b, &item2).await;
+    engine_cap_finish(&b, &item2).await;
+    assert!(wake().await.woke);
+    // A manual retry queues behind the resumed session.
+    b.command(request(json!({"command":"step_retry","args":{"project":{"kind":"id","value":q},"selection":{"steps":["batch"],"tags":null},"message":null,"reason":"test","author":"test"}}))).await.unwrap();
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 0);
+    engine_cap_finish(&b, &first).await;
+    assert_eq!(reconcile_project(&b, q, "engines").await.unwrap(), 1);
+    // A restart policy reuses admission rather than spawning directly from settlement.
+    engine_cap_step(&b, p, "repeat", 10, &repo, json!({"restart":"always"})).await;
+    engine_cap_config(&home, 2);
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 1);
+    let repeat = f.launched(5).await[4].clone();
+    run_started(&b, &repeat).await;
+    engine_cap_config(&home, 1);
+    engine_cap_finish(&b, &repeat).await;
+    f.6.fetch_add(61, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 0);
+    let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":p},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert!(
+        status["steps"]["repeat"]["waiting"]
+            .to_string()
+            .contains("engine cap"),
+        "{status}"
+    );
+    let retry = f.launched(5).await[3].clone();
+    run_started(&b, &retry).await;
+    engine_cap_finish(&b, &retry).await;
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 1);
+    assert_eq!(
+        f.launched(6).await[5]
+            .identity
+            .step
+            .as_ref()
+            .unwrap()
+            .as_str(),
+        "repeat"
+    );
+}
+
+/// A direct or queued fn_call is another engine run, so it must not bypass plan admission
+/// or disappear from the home-wide held/queued accounting.
+#[tokio::test]
+async fn admission_engine_cap_also_counts_calls_and_their_queue() {
+    let (home, b, f, p, repo) = agent_setup().await;
+    engine_cap_config(&home, 1);
+    b.acquire_scheduler("engines".into()).await.unwrap();
+    assert_eq!(reconcile_project(&b, p, "engines").await.unwrap(), 1);
+    let first = f.launched(1).await[0].clone();
+    run_started(&b, &first).await;
+    let call = FnCall {
+        name: "agent.run".into(),
+        inputs: serde_json::from_value(json!({"engine":"codex","cwd":repo,"spec":"Work"})).unwrap(),
+        project: Some(ProjectSelector::Id(p)),
+        wait_seconds: Some(0),
+        direct: false,
+        author: Some("test".into()),
+        limits: None,
+    };
+    let pending = b.calls().fn_call(call.clone()).await.unwrap();
+    assert!(!b.calls().admit_queued(pending.call, Some(p)).await.unwrap());
+    let mut direct = call;
+    direct.direct = true;
+    assert!(
+        matches!(b.calls().fn_call(direct).await,Err(PublicError::Busy{message,..}) if message.contains("engine cap"))
+    );
+    let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":p},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(status["execution"]["engines"]["codex"]["queued"], 1);
+    engine_cap_finish(&b, &first).await;
+    assert!(b.calls().admit_queued(pending.call, Some(p)).await.unwrap());
+    let status = data_of(&b,json!({"command":"status","args":{"project":{"kind":"id","value":p},"all":true,"selection":{"steps":null,"tags":null}}})).await;
+    assert_eq!(
+        status["execution"]["engines"]["codex"],
+        json!({"max_runs":1,"held":1,"projects":{"p":1},"queued":0})
+    );
+}

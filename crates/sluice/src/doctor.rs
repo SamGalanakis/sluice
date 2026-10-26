@@ -73,14 +73,27 @@ pub fn run(mode: crate::cli::Mode, home: PathBuf) -> ModeFuture {
         let report = HostCheck::new(tmux_prefix()).run().await;
         let engines = engines(&home).await?;
         let release = crate::release::doctor()?;
+        let caps = sluice_runtime::config::load_engine_caps(&home).map_err(storage)?;
         if json {
             let mut value = serde_json::to_value(&report).map_err(storage)?;
             value["engines"] = Value::Array(engines);
+            value["engine_caps"] = serde_json::json!(
+                caps.iter()
+                    .filter_map(|(name, c)| c
+                        .max_runs
+                        .map(|max| (name.clone(), serde_json::json!({"max_runs":max}))))
+                    .collect::<serde_json::Map<_, _>>()
+            );
             for key in ["installation", "manifest", "manifest_ok", "error"] {
                 value[key] = release[key].clone();
             }
             println!("{}", serde_json::to_string_pretty(&value).map_err(storage)?);
         } else {
+            for (name, cap) in &caps {
+                if let Some(max) = cap.max_runs {
+                    println!("ok  engine cap {name:<13} {max} concurrent runs across this home");
+                }
+            }
             for check in &report.checks {
                 println!(
                     "{} {:<24} {}",

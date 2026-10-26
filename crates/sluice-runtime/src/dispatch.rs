@@ -126,6 +126,9 @@ impl VerificationRegistry for Catalog {
     }
 }
 impl CallRegistry for Catalog {
+    fn catalog(&self) -> Option<&Catalog> {
+        Some(self)
+    }
     fn freeze(
         &self,
         project: Option<ProjectId>,
